@@ -1,8 +1,37 @@
+# ===== Core (UI + data) =====
+streamlit>=1.36,<1.40
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+pyarrow>=15,<19
+matplotlib>=3.8,<3.10
+plotly>=5.20,<6.0
+pillow>=10,<12
+python-dateutil>=2.8,<3.0
+lxml>=5.2,<6.0           # enables pandas.read_xml
+openpyxl>=3.1,<4.0       # read/write .xlsx
+xlrd>=2.0,<3.0           # read legacy .xls
+jsonschema>=4.21,<5.0
 
-streamlit
-pandas
-numpy
-sentence-transformers
-faiss-cpu
-pypdf
-anthropic
+# ===== Modeling (lightweight) =====
+scikit-learn>=1.4,<1.6
+statsmodels>=0.14,<0.15
+pmdarima>=2.0,<3.0
+
+# ===== Decision Intelligence / LLMs =====
+openai>=1.30,<2.0
+anthropic>=0.30,<1.0
+tiktoken>=0.7,<0.8
+langchain>=0.2,<0.3
+langchain-community>=0.2,<0.3
+faiss-cpu>=1.8,<1.9
+pypdf>=4.2,<5.0          # parse PDFs into KnowledgeBase
+markdown>=3.6,<4.0       # render/clean KB notes
+
+# ===== Optional (LOCAL ONLY – may be heavy/slow to build on Streamlit Cloud) =====
+# prophet>=1.1            # requires compiler + cmdstan/prophet build
+# darts>=0.29             # pulls in torch (very heavy); expect cloud build failures
+# xgboost>=2.0
+# lightgbm>=4.3
+# statsforecast>=1.7      # depends on numba; works locally, may be slow in cloud
+# sentence-transformers>=3.0  # alternative embeddings for KB (heavy)
+# unstructured>=0.15      # advanced document loaders (heavy)

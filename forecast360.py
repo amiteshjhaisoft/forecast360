@@ -21,6 +21,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# === Performance & Safety Utilities: baseline imports ===
+import warnings
+import logging
+import numpy as np
 import matplotlib.pyplot as plt
 
 # ===== Forecast360 → LLM snapshot helper (Option A) =====
@@ -3456,3 +3461,318 @@ def render_one_pager():
 
 # ============== Run ==============
 render_one_pager()
+
+
+# ============================================================================
+# Forecast360: Performance & Safety Utilities (drop-in, non-breaking)
+# This block adds vectorized imputation, batch exog builder, optional Numba-accelerated
+# recursive forecasting, joblib parallel evaluation, centralized lazy imports,
+# uniform logging/warnings, faster Arrow sanitizer, light param validation, and caching helpers.
+# ============================================================================
+
+# ---- Uniform logger & warn() ------------------------------------------------
+_logger = logging.getLogger("forecast360")
+if not _logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+    _logger.addHandler(_h)
+# Keep INFO as default to avoid noisy logs; adjust via env if needed.
+if _logger.level == logging.NOTSET:
+    _logger.setLevel(logging.INFO)
+
+def warn(msg: str):
+    try:
+        _logger.warning(msg)
+        warnings.warn(msg)
+    except Exception:
+        # last resort: silent
+        pass
+
+# ---- Single-pass, vectorized imputation ------------------------------------
+def impute_series(y, method: str = "median", const: float | int | None = None):
+    """
+    Fast, single-pass imputation for numeric series.
+    Accepts any array-like convertible to pandas Series.
+    """
+    import pandas as pd  # local import to avoid hard dependency at import time
+    if y is None:
+        return y
+    if not isinstance(y, pd.Series):
+        try:
+            y = pd.Series(y)
+        except Exception:
+            return y
+    if y.empty:
+        return y
+    y = pd.to_numeric(y, errors="coerce")
+
+    m = (method or "median").lower()
+    if m == "ffill":
+        return y.ffill()
+    if m == "bfill":
+        return y.bfill()
+    if m == "zero":
+        return y.fillna(0.0)
+    if m == "mean":
+        return y.fillna(y.mean())
+    if m == "median":
+        return y.fillna(y.median())
+    if m == "mode":
+        try:
+            mode_val = y.dropna().mode()
+            return y.fillna(float(mode_val.iloc[0]) if not mode_val.empty else y.median())
+        except Exception:
+            return y.fillna(y.median())
+    if m == "interpolate_linear":
+        return y.interpolate(method="linear", limit_direction="both")
+    if m == "interpolate_time" and isinstance(y.index, pd.DatetimeIndex):
+        return y.interpolate(method="time", limit_direction="both")
+    if m == "constant":
+        return y.fillna(float(const if const is not None else 0.0))
+    if m == "drop":
+        return y.dropna()
+    return y  # "none"
+
+# ---- Batch exogenous feature builder (vectorized, no concat-in-loop) --------
+def build_exog_matrix(df, cols, lags=None, scale: bool = True):
+    """
+    Vectorized exogenous matrix construction with optional lags.
+    - df: pandas DataFrame
+    - cols: list[str] columns to include
+    - lags: list[int] of lag offsets to include (default [0,1,7])
+    Returns pandas DataFrame aligned to df.index.
+    """
+    import pandas as pd
+    if not cols:
+        return pd.DataFrame(index=df.index if hasattr(df, "index") else None)
+    lags = [0,1,7] if lags is None else sorted(set(int(l) for l in lags))
+
+    base = df[cols].apply(pd.to_numeric, errors="coerce")
+    mats = []
+    names = []
+    for l in lags:
+        if l == 0:
+            mats.append(base.to_numpy())
+            names.extend(cols)
+        else:
+            shifted = base.shift(l)
+            mats.append(shifted.to_numpy())
+            names.extend([f"{c}_lag{l}" for c in cols])
+
+    X = pd.DataFrame(np.column_stack(mats), index=base.index, columns=names)
+
+    if scale and X.shape[1]:
+        mu = X.mean(axis=0)
+        sd = X.std(axis=0).replace(0, 1.0)
+        X = (X - mu) / sd
+        # store scaler for potential inverse transform
+        try:
+            X.attrs["__scaler__"] = {"mean": mu, "std": sd}
+        except Exception:
+            pass
+    return X
+
+# ---- Optional Numba acceleration for recursive tree forecasts ---------------
+def _maybe_numba():
+    try:
+        import numba  # type: ignore
+        return numba.njit, True
+    except Exception:
+        return (lambda f: f), False
+
+_njit, _HAVE_NUMBA = _maybe_numba()
+
+@_njit
+def _roll_window_update(arr, new_val):
+    n = arr.shape[0]
+    out = np.empty_like(arr)
+    out[1:] = arr[:-1]
+    out[0] = new_val
+    return out
+
+def recursive_forecast_tree(model, last_window, horizon: int, exog_future=None):
+    """
+    Predict H steps ahead using a fitted regressor expecting lag features.
+    - last_window: latest lag vector (shape [n_lags])
+    - exog_future: optional exog per step (H x n_exog)
+    Works with or without numba; numba accelerates inner loop.
+    """
+    yhat = np.empty(int(horizon), dtype=np.float64)
+    win = np.asarray(last_window, dtype=np.float64)
+    H = int(horizon)
+    for h in range(H):
+        if exog_future is not None:
+            feats = np.concatenate([win, np.asarray(exog_future[h], dtype=np.float64)])
+        else:
+            feats = win
+        pred = float(model.predict(feats.reshape(1, -1))[0])
+        yhat[h] = pred
+        win = _roll_window_update(win, pred)
+    return yhat
+
+# ---- joblib parallel model evaluation --------------------------------------
+def evaluate_models_parallel(models, fit_fn, score_fn, n_jobs: int = -1, verbose: int = 0):
+    """
+    models: list of (name, model_obj, params_dict)
+    fit_fn(model_obj, params) -> fitted, extras
+    score_fn(fitted, extras) -> dict of metrics
+    Returns: list of dicts: {"name", "ok", **metrics}
+    """
+    try:
+        from joblib import Parallel, delayed
+    except Exception:
+        warn("joblib not available; falling back to sequential evaluation.")
+        def _run_one(mdef):
+            name, mobj, params = mdef
+            try:
+                fitted, extras = fit_fn(mobj, params)
+                metrics = score_fn(fitted, extras)
+                return {"name": name, "ok": True, **metrics}
+            except Exception as e:
+                warn(f"[{name}] failed: {e}")
+                return {"name": name, "ok": False}
+        return [_run_one(m) for m in models]
+
+    def _run_one(mdef):
+        name, mobj, params = mdef
+        try:
+            fitted, extras = fit_fn(mobj, params)
+            metrics = score_fn(fitted, extras)
+            return {"name": name, "ok": True, **metrics}
+        except Exception as e:
+            warn(f"[{name}] failed: {e}")
+            return {"name": name, "ok": False}
+
+    return Parallel(n_jobs=n_jobs, prefer="threads", verbose=verbose)(
+        delayed(_run_one)(m) for m in models
+    )
+
+# ---- Centralized lazy import helper ----------------------------------------
+def lazy_import(name: str):
+    try:
+        module = __import__(name, fromlist=["*"])
+        return module, True
+    except Exception:
+        return None, False
+
+# ---- Faster Arrow sanitizer (override any earlier def) ---------------------
+def _sanitize_for_arrow(df):
+    """Coerce a DataFrame into Arrow-friendly dtypes safely and quickly."""
+    import pandas as pd
+    if df is None or not hasattr(df, "empty") or df.empty:
+        return df
+    out = df.copy()
+    for c in out.columns:
+        s = out[c]
+        is_obj = s.dtype == "object"
+        # Decode bytes to text if present
+        if is_obj:
+            try:
+                mask_bytes = s.map(lambda x: isinstance(x, (bytes, bytearray)))
+                if mask_bytes.any():
+                    s = s.where(~mask_bytes, s.where(~mask_bytes, None))
+                    s = s.mask(mask_bytes, s[mask_bytes].map(lambda x: x.decode("utf-8", "ignore")))
+            except Exception:
+                pass
+        try:
+            if pd.api.types.is_bool_dtype(s) or (is_obj and s.dropna().map(type).isin({bool, np.bool_}).all()):
+                out[c] = s.astype("boolean[pyarrow]")
+                continue
+            if is_obj:
+                num_try = pd.to_numeric(s, errors="coerce")
+                if num_try.notna().mean() >= 0.9:
+                    out[c] = num_try
+                else:
+                    out[c] = s.astype("string[pyarrow]")
+                continue
+            if pd.api.types.is_integer_dtype(s):
+                out[c] = s.astype("Int64")
+            elif pd.api.types.is_float_dtype(s):
+                out[c] = s.astype("float64")
+            elif pd.api.types.is_datetime64_any_dtype(s):
+                out[c] = pd.to_datetime(s, errors="coerce")
+        except Exception:
+            try:
+                out[c] = s.astype("string[pyarrow]")
+            except Exception:
+                out[c] = s.astype("string")
+    # Ensure categorical become strings (Arrow-friendly) without losing info
+    for c in out.select_dtypes(include="category").columns:
+        out[c] = out[c].astype("string[pyarrow]")
+    return out
+
+# Make sure callers use the latest sanitizer if an earlier def exists
+globals()["_sanitize_for_arrow"] = _sanitize_for_arrow
+
+# ---- Fast correlation utility ---------------------------------------------
+def fast_corr(df_num, method: str = "pearson", subset=None):
+    import pandas as pd
+    if df_num is None:
+        return None
+    if subset:
+        try:
+            X = df_num[subset]
+        except Exception:
+            X = df_num
+    else:
+        X = df_num
+    if not isinstance(X, pd.DataFrame) or X.shape[1] < 2:
+        return None
+    return X.corr(method=method)
+
+# ---- Cached calendar feature builder ---------------------------------------
+try:
+    import streamlit as st
+    @st.cache_data(show_spinner=False)
+    def make_calendar_features(idx):
+        import pandas as pd
+        if not isinstance(idx, pd.DatetimeIndex):
+            try:
+                idx = pd.DatetimeIndex(idx)
+            except Exception:
+                return pd.DataFrame(index=getattr(idx, "index", None))
+        df = pd.DataFrame(index=idx)
+        df["dow"] = idx.dayofweek.astype("int8")
+        df["month"] = idx.month.astype("int8")
+        df["is_month_start"] = idx.is_month_start.astype("int8")
+        df["is_month_end"]   = idx.is_month_end.astype("int8")
+        df["is_weekend"]     = (df["dow"] >= 5).astype("int8")
+        return df
+except Exception:
+    # Fallback: non-cached if Streamlit unavailable at import time
+    def make_calendar_features(idx):
+        import pandas as pd
+        try:
+            idx = pd.DatetimeIndex(idx)
+        except Exception:
+            return pd.DataFrame(index=getattr(idx, "index", None))
+        df = pd.DataFrame(index=idx)
+        df["dow"] = idx.dayofweek.astype("int8")
+        df["month"] = idx.month.astype("int8")
+        df["is_month_start"] = idx.is_month_start.astype("int8")
+        df["is_month_end"]   = idx.is_month_end.astype("int8")
+        df["is_weekend"]     = (df["dow"] >= 5).astype("int8")
+        return df
+
+# ---- Defensive hyperparameter validation -----------------------------------
+def validate_hyperparams(params: dict) -> None:
+    try:
+        folds = int(params.get("cv_folds", 3))
+        if folds < 2:
+            raise ValueError("Cross-validation folds must be ≥ 2.")
+        H = int(params.get("cv_horizon", 12))
+        if H < 1 or H > 5000:
+            raise ValueError("Forecast horizon must be in [1, 5000].")
+        sm = str(params.get("seasonal_m", "auto")).strip().lower()
+        if sm != "auto":
+            v = float(sm)
+            if v < 0 or v > 10000:
+                raise ValueError("Seasonal period m must be in [0, 10000] or 'auto'.")
+    except ValueError as e:
+        raise
+    except Exception:
+        # Do not fail hard on unexpected structures; only warn.
+        warn("Could not fully validate hyperparameters; proceeding with defaults.")
+        return
+
+# ============================================================================
