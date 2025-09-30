@@ -4,6 +4,7 @@
 # Imports and Shared Utilities (from top section)
 # ===============================================
 import os
+from typing import Optional, Dict, List
 import sys
 import io
 import json
@@ -22,20 +23,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+# (no-snapshot) capture_forecast360_results disabled, gather_and_snapshot_forecast360
+
 # === Performance & Safety Utilities: baseline imports ===
 import warnings
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-
-# ===== Forecast360 → LLM snapshot helper (Option A) =====
-from typing import Optional, Dict, List
-import streamlit as st
-
-try:
-    import pandas as pd  # only for type checking; optional
-except Exception:
-    pd = None
 
 # ---------- Arrow/Parquet sanitiser ----------
 def _sanitize_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
@@ -107,9 +101,7 @@ def st_df(obj, *args, **kwargs):
         pass
     return st.dataframe(obj, *args, **kwargs)
 
-
-
-from f360_llm_snapshot import capture_forecast360_results
+# (no-snapshot) capture_forecast360_results disabled
 
 def _fallback_summary(best_model: Optional[str], leaderboard: Optional[Dict | List[Dict]]) -> Optional[str]:
     """Build a tiny summary if the app didn't produce one."""
@@ -136,123 +128,6 @@ def _fallback_summary(best_model: Optional[str], leaderboard: Optional[Dict | Li
 
     return "\n\n".join(parts) if parts else None
 
-    def gather_and_snapshot_forecast360(
-            page_name: str = "One Pager",
-            run_tag: str = "one-pager",
-        ) -> None:
-            """
-            Collect results from st.session_state and write a snapshot that DI can use.
-            """
-            ss = st.session_state
-
-            # Core artifacts (read if present)
-            main_df = ss.get("dfd") or ss.get("main_df")
-            forecast_df = ss.get("forecast_df") or ss.get("yhat_df") or ss.get("output_df")
-
-            # Ensure Arrow-safe tables for downstream consumers
-            if isinstance(main_df, pd.DataFrame):
-                main_df = _sanitize_for_arrow(main_df)
-            if isinstance(forecast_df, pd.DataFrame):
-                forecast_df = _sanitize_for_arrow(forecast_df)
-
-            # Leaderboard can be either rows (list[dict]) or a flat dict of headline metrics
-            leaderboard_rows = ss.get("leaderboard_rows") or ss.get("leaderboard_list")
-            leaderboard_metrics_dict = ss.get("leaderboard_metrics_dict") or ss.get("headline_metrics")
-            best_model_name = ss.get("best_model_name") or ss.get("best_model")
-
-            # Summary: prefer app’s summary_text; else synthesize
-            summary_text = ss.get("summary_text") or _fallback_summary(
-                best_model_name, leaderboard_rows or leaderboard_metrics_dict
-            )
-
-            # Build the payload DI understands
-            metrics_payload: Dict = {}
-            if isinstance(leaderboard_rows, list) and leaderboard_rows:
-                metrics_payload["leaderboard"] = leaderboard_rows
-            elif isinstance(leaderboard_metrics_dict, dict):
-                metrics_payload = dict(leaderboard_metrics_dict)
-
-            # Write the snapshot (tolerates None values)
-            capture_forecast360_results(
-                page_name=page_name,
-                models_summary_text=summary_text,
-                best_model=best_model_name,
-                metrics=metrics_payload,
-                input_table=(main_df if pd is not None and isinstance(main_df, pd.DataFrame) else None),
-                output_table=(forecast_df if pd is not None and isinstance(forecast_df, pd.DataFrame) else None),
-                run_tag=run_tag,
-                name="forecast360",
-                min_interval_sec=30,
-            )
-
-
-
-    # Leaderboard can be either rows (list[dict]) or a flat dict of headline metrics
-    leaderboard_rows = ss.get("leaderboard_rows") or ss.get("leaderboard_list")
-    leaderboard_metrics_dict = ss.get("leaderboard_metrics_dict") or ss.get("headline_metrics")
-    best_model_name = ss.get("best_model_name") or ss.get("best_model")
-
-    # Summary: prefer app’s summary_text; else synthesize
-    summary_text = ss.get("summary_text") or _fallback_summary(
-        best_model_name, leaderboard_rows or leaderboard_metrics_dict
-    )
-
-    # Build the payload DI understands: either rows under "leaderboard" or a flat dict
-    metrics_payload: Dict = {}
-    if isinstance(leaderboard_rows, list) and leaderboard_rows:
-        metrics_payload["leaderboard"] = leaderboard_rows
-    elif isinstance(leaderboard_metrics_dict, dict):
-        metrics_payload = dict(leaderboard_metrics_dict)
-
-    # Write the snapshot (tolerates None values)
-    capture_forecast360_results(
-        page_name=page_name,
-        models_summary_text=summary_text,
-        best_model=best_model_name,
-        metrics=metrics_payload,
-        input_table=(main_df if pd is not None and isinstance(main_df, pd.DataFrame) else None),
-        output_table=(forecast_df if pd is not None and isinstance(forecast_df, pd.DataFrame) else None),
-        run_tag=run_tag,
-        name="forecast360",
-        min_interval_sec=30,  # de-dupe window; raise/lower as you like
-    )
-
-
-
-
-
-def _safe_align_series_to_index(s, target_index):
-    """
-    Align a Series `s` to `target_index` even if either side has duplicate labels.
-    - De-duplicates `s` on its index (keep='last') to avoid reindex errors.
-    - Attempts datetime index coercion for robust matching.
-    - Returns a Series indexed like `target_index`.
-    """
-    import pandas as pd
-    # Ensure Series
-    if not hasattr(s, "index"):
-        s = pd.Series(s)
-    s2 = pd.Series(s.copy())
-    # Try to coerce both indices to comparable datetime types; ignore errors if not datetime
-    try:
-        s2.index = pd.to_datetime(s2.index, errors="coerce")
-    except Exception:
-        pass
-    try:
-        tgt_idx = pd.to_datetime(target_index, errors="coerce")
-    except Exception:
-        tgt_idx = target_index
-    # Drop duplicate labels on the right to avoid "cannot reindex on duplicate labels"
-    s2 = s2[~s2.index.duplicated(keep="last")]
-    # Left join to preserve order & duplicates of target_index
-    aligned = pd.DataFrame(index=tgt_idx).join(s2.rename("_val_"), how="left")["_val_"]
-    # Restore the original target_index exactly (types/values)
-    aligned.index = target_index
-    return aligned
-
-
-warnings.filterwarnings("ignore")
-
 # import streamlit as st
 # st.set_page_config(page_title='Forecast360', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
 st.set_page_config(
@@ -261,9 +136,6 @@ st.set_page_config(
     layout='wide',
     initial_sidebar_state='expanded'
 )
-
-
-
 
 # ========= Unified, meaningful tooltips for ALL Streamlit inputs =========
 # Drop this block once right after st.set_page_config(...)
@@ -424,7 +296,6 @@ for _name in (
         setattr(st, _name, _with_default_help(getattr(st, _name)))
 # ======================== end unified tooltips ============================
 
-
 # ===== Global visual theme (fonts, colors, cards) =====
 st.markdown("""
 <style>
@@ -480,10 +351,7 @@ plt.rcParams.update({
     ])
 })
 
-
 st.markdown("<style>section.main > div.block-container{max-width:100% !important;padding-left:12px;padding-right:12px;}.main .block-container{max-width:100% !important;}[data-testid=stAppViewContainer] .block-container{max-width:100% !important;}[data-testid=stToolbar]{right:8px;}[data-testid=stSidebar] .block-container{padding:0.5rem 0.5rem;}</style>", unsafe_allow_html=True)
-
-
 
 # import numpy as np
 # import pandas as pd
@@ -641,7 +509,6 @@ def build_feature_importance_df(model=None,
 
     return None
 
-
 # ==== Optional deps & feature flags (safe imports) ====
 try:
     import numpy as np
@@ -731,107 +598,22 @@ def _snap_df(snap: dict, key: str) -> pd.DataFrame | None:
         pass
     return None
 
-
-# ===== Snapshot persistence (Getting Started -> Visualization) =====
+# ===== Snapshot persistence (removed) =====
 def _gs_store() -> dict:
-    """
-    Lightweight store living in st.session_state.
-    Keys:
-      - snapshot: dict of artifacts saved from Getting Started
-      - run_ver / computed_ver: simple version counter for last run
-      - dirty: True if settings changed since last run (optional)
-    """
-    S = st.session_state.setdefault("_gs_store", {})
-    S.setdefault("snapshot", {})
-    S.setdefault("run_ver", 0)
-    return S
+    return {}
 
 def gs_clear_snapshot():
-    """Clear the saved artifacts (e.g., before a fresh run)."""
-    S = _gs_store()
-    S["snapshot"] = {}
-    S["dirty"] = False
-    # do NOT bump version here
+    return None
 
 def gs_save_snapshot(**artifacts):
-    """
-    Save one or more artifacts into the snapshot.
-    Serialization rules match what Visualization expects:
-      - pandas.DataFrame -> ("df_json", df.to_json(orient="split"))
-      - matplotlib Figure (or similar) -> ("raw", figure_object)
-      - primitives / strings / dicts / lists -> ("raw", value)
-      - anything else -> ("raw", str(value))
-    """
-    S = _gs_store()
-    snap = S.setdefault("snapshot", {})
+    return None
 
-    for key, val in artifacts.items():
-        try:
-            # DataFrames are stored as JSON "split" so index & dtypes survive
-            if isinstance(val, pd.DataFrame):
-                snap[key] = ("df_json", val.to_json(orient="split"))
-                continue
+def _snap_get(snap: dict, key: str):
+    return (None, None)
 
-            # Matplotlib figures: keep raw so st.pyplot can render later
-            _t = type(val).__name__.lower()
-            if ("figure" in _t) or ("matplotlib" in str(type(val)).lower()):
-                snap[key] = ("raw", val)
-                continue
+def _snap_df(snap: dict, key: str):
+    return None
 
-            # Primitives and common containers
-            if isinstance(val, (str, int, float, bool, dict, list, tuple)) or val is None:
-                snap[key] = ("raw", val)
-                continue
-
-            # Last resort: stringify
-            snap[key] = ("raw", str(val))
-        except Exception:
-            # If anything goes wrong, still try to keep something
-            try:
-                snap[key] = ("raw", str(val))
-            except Exception:
-                pass
-
-    # bump a simple version so Viz can show "vN"
-    S["computed_ver"] = int(S.get("run_ver", 0)) + 1
-    S["run_ver"] = S["computed_ver"]
-    S["dirty"] = False
-
-    # Build a compact readable text of the current snapshot for LLMs
-    try:
-        summary_parts = []
-        for k, v in sorted(snap.items()):
-            try:
-                tag, payload = v
-            except Exception:
-                tag, payload = "raw", v
-            if tag == "df_json":
-                summary_parts.append(f"{k}: [table with {len(payload)} chars JSON]")
-            else:
-                # Truncate long strings
-                s = str(payload)
-                if len(s) > 1200: s = s[:1200] + "..."
-                summary_parts.append(f"{k}: {s}")
-        snap["forecast_summary_text"] = ("raw", "\n".join(summary_parts))
-    except Exception:
-        pass
-
-
-
-    # --- Auto-ingest into KnowledgeBase for RAG ---
-    try:
-        import __main__
-        get_kb = getattr(__main__, "get_kb", None)
-        if callable(get_kb):
-            kb = get_kb()
-            if kb is not None:
-                payload = snap  # include everything captured
-                title = "Forecast360 Run Snapshot"
-                tags = ["auto", "snapshot"]
-                kb.ingest_snapshot(payload, title=title, tags=tags)
-    except Exception as _e:
-        # Non-fatal: keep the app running even if KB capture fails
-        pass
 # -----------------------------
 # File types (single source of truth)
 # -----------------------------
@@ -865,7 +647,6 @@ except NameError:
                     continue
         return df.columns[0] if len(df.columns) else None
 
-
 # ========================= File reader (CSV/XLSX/Parquet/JSON/XML) =========================
 def read_any(file_bytes: bytes, name: str, xml_xpath: str = "") -> pd.DataFrame:
     low = (name or "").lower()
@@ -898,11 +679,9 @@ def read_any(file_bytes: bytes, name: str, xml_xpath: str = "") -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-
 @st.cache_data(show_spinner=False)
 def cached_read(file_bytes: bytes, name: str, xml_xpath: str = "") -> pd.DataFrame:
     return read_any(file_bytes, name, xml_xpath=xml_xpath)
-
 
 # ========================= LLM & KB Helpers (DI) =========================
 import json as _json
@@ -958,7 +737,6 @@ def _build_kb_context_from_snapshot(snap: dict, top_k: int = 6, max_chars: int =
         text = text[:max_chars] + "\n...[truncated]"
     return text if text.strip() else "Snapshot exists but contains no readable artifacts."
 
-
 def sidebar_getting_started():
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
     with st.sidebar:
@@ -967,7 +745,8 @@ def sidebar_getting_started():
             st.image(
                 "assets/isoft_logo.png",
                 caption="iSOFT ANZ Pvt Ltd",
-                use_container_width=False,
+                # use_column_width=True,
+                use_container_width=True
             )
 
         st.subheader("🚀 Getting Started")
@@ -1026,6 +805,9 @@ def sidebar_getting_started():
                         _data = None
 
                 source_name = up.name
+                # Store original (raw) shape before any cleaning
+                st.session_state["raw_rows"] = int(_data.shape[0])
+                st.session_state["raw_cols"] = int(_data.shape[1])
             except Exception as e:
                 st.error(f"Failed to read file: {e}")
                 _data = None
@@ -1125,26 +907,55 @@ def sidebar_getting_started():
             help="This is the series you want to model/forecast (e.g., Sales). Only numeric columns are allowed.",
         )
 
-        # --- Coerce selected columns to correct dtypes for time-series ---
-        # 1) Date → datetime64 (drop invalid)
+        # # --- Coerce selected columns to correct dtypes for time-series ---
+        # # 1) Date → datetime64 (drop invalid)
+        # _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce", infer_datetime_format=True)
+        
+        # _data = _data.dropna(subset=[date_col])
+
+        # # 2) Target → numeric (coerce) and drop rows where it’s NaN
+        # _data[target_col] = pd.to_numeric(_data[target_col], errors="coerce")
+        # _data = _data.dropna(subset=[target_col])
+
+        # # 3) De-duplicate on date, keep latest
+        # _data = _data.sort_values(by=[date_col]).drop_duplicates(subset=[date_col], keep="last")
+
+        # --- Coerce selected columns & record why rows are dropped ---
+        # 0) Baseline
+        n0 = int(len(_data))
+
+        # 1) Date → datetime64
         _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce", infer_datetime_format=True)
+        bad_date = int(_data[date_col].isna().sum())
         _data = _data.dropna(subset=[date_col])
 
-        # 2) Target → numeric (coerce) and drop rows where it’s NaN
+        # 2) Target → numeric
         _data[target_col] = pd.to_numeric(_data[target_col], errors="coerce")
+        bad_target = int(_data[target_col].isna().sum())
         _data = _data.dropna(subset=[target_col])
 
-        # 3) De-duplicate on date, keep latest
-        _data = _data.sort_values(by=[date_col]).drop_duplicates(subset=[date_col], keep="last")
+        # 3) Duplicates — drop only exact full-row duplicates (all columns match)
+        before_dedup = int(len(_data))
+        exact_dupes = int(_data.duplicated(keep="last").sum())  # count first (for breakdown)
+        _data = _data.drop_duplicates(keep="last")              # no subset ⇒ all columns
+        dupes_dropped = exact_dupes
 
+        # Save the breakdown for the dashboard
+        st.session_state["drop_breakdown"] = {
+            "Unparseable dates": bad_date,
+            "Non-numeric target": bad_target,
+            "Exact-duplicate rows removed": dupes_dropped,
+        }
 
+        # Store cleaned shape after coercions/drops/dedup
+        st.session_state["clean_rows"] = int(_data.shape[0])
+        st.session_state["clean_cols"] = int(_data.shape[1])
         # ---------- Stash for downstream use ----------
         st.session_state["uploaded_df"] = _data
         st.session_state["source_name"] = source_name
         st.session_state["__numeric_candidates"] = numeric_cols
 
         st.divider()
-
 
         # ---- Resampling & gaps ----------------------------------------------
         st.markdown("**⏳ Resampling & gaps**")
@@ -1496,23 +1307,13 @@ def page_getting_started():
                 return pd.read_xml(BytesIO(raw))
         raise ValueError(f"Unsupported extension: {ext}")
 
-    # def _arrow_compatible_df(df: pd.DataFrame) -> pd.DataFrame:
-    #     try:
-    #         _df = df.copy()
-    #         for c in _df.columns:
-    #             s = _df[c]
-    #             if s.dtype == "object" and s.map(lambda x: isinstance(x, (bytes, bytearray))).any():
-    #                 _df[c] = s.map(lambda x: x.decode("utf-8", "replace") if isinstance(x, (bytes, bytearray)) else x)
-    #         return _df
-    #     except Exception:
-    #         return df
+   
     def _arrow_compatible_df(df: pd.DataFrame) -> pd.DataFrame:
         try:
             return _sanitize_for_arrow(df)
         except Exception:
             # even on failure return the original so the app doesn't crash
             return df
-
 
     def _profile_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         import numpy as np
@@ -1614,19 +1415,52 @@ def page_getting_started():
     row1_lhs, row1_rhs = st.columns([0.45, 0.55], gap="large")
 
     with row1_lhs:
-        st.subheader("📁 Uploaded File Summary")
-        summary = pd.DataFrame(
-            {
-                "Item": ["🗂️ File Name", "🧾 Type", "🔢 Columns", "📊 Rows"],
-                "Value": [source_name or "-", ext, int(n_cols), int(n_rows)],
-            }
-        )
-        st_df(summary, hide_index=True, use_container_width=True)
-
-
         
+        st.subheader("📁 Uploaded File Summary")
+
+        raw_rows   = int(st.session_state.get("raw_rows",  n_rows))
+        raw_cols   = int(st.session_state.get("raw_cols",  n_cols))
+        clean_rows = int(st.session_state.get("clean_rows", n_rows))
+        clean_cols = int(st.session_state.get("clean_cols", n_cols))
+        bd         = st.session_state.get("drop_breakdown") or {}
+
+        dropped = max(raw_rows - clean_rows, 0)
+
+        def _fmt(n): 
+            try: 
+                return f"{int(n):,}"
+            except Exception:
+                return str(n)
+
+        rows = [
+            ("🗂️ File Name",                      source_name or "-"),
+            ("🧾 Type",                           ext),
+            ("🔢 Columns (original)",             _fmt(raw_cols)),
+            ("📊 Rows (original)",                _fmt(raw_rows)),
+            ("🔢 Columns (after cleaning)",       _fmt(clean_cols)),
+            ("📊 Rows (after cleaning)",          _fmt(clean_rows)),
+            ("➖ Rows removed (invalid/dupes)",    f"{_fmt(dropped)}" + (f"  ({dropped/raw_rows:.1%} of original)" if raw_rows else "")),
+        ]
+
+        # Inline breakdown as additional rows
+        if isinstance(bd, dict) and bd:
+            rows.append(("🔎 Row-drop breakdown", ""))  # section header row
+            for reason, count in bd.items():
+                count = int(count)
+                pct_of_drop = f"{count/dropped:.1%}" if dropped else "—"
+                pct_of_raw  = f"{count/raw_rows:.1%}" if raw_rows else "—"
+                rows.append((
+                    f"• {reason}",
+                    f"{_fmt(count)}  ({pct_of_drop} of dropped; {pct_of_raw} of original)"
+                ))
+
+        summary_merged = pd.DataFrame(rows, columns=["Item", "Value"])
+        st_df(summary_merged, hide_index=True, use_container_width=True)
+
+ 
 
     with row1_rhs:
+        
         st.subheader("👀 Data Preview")
 
         # Fixed height equal to 3-row preview (keeps layout stable)
@@ -1641,10 +1475,10 @@ def page_getting_started():
         if max_preview <= 0:
             st.info("No rows to preview.")
         else:
-            choices_all = [1, 3, 5, 10, 15, 20, 25]
+            choices_all = [1, 3, 5, 8, 10, 15, 20, 25]
             choices = [c for c in choices_all if c <= max_preview]
 
-            current = st.session_state.get("gs_preview_rows", 3)
+            current = st.session_state.get("gs_preview_rows", 5)
             try:
                 current = int(current)
             except Exception:
@@ -1653,7 +1487,7 @@ def page_getting_started():
                 current = min(choices, key=lambda x: (abs(x - current), x))
                 st.session_state["gs_preview_rows"] = current
 
-            TABLE_HEIGHT_PX = st.session_state.setdefault("gs_preview_height_px", _fixed_height_for_rows(3))
+            TABLE_HEIGHT_PX = st.session_state.setdefault("gs_preview_height_px", _fixed_height_for_rows(5))
 
             table_slot = st.empty()
             table_slot.dataframe(dfd.head(current), use_container_width=True, height=TABLE_HEIGHT_PX)
@@ -1696,18 +1530,23 @@ def page_getting_started():
         import numpy as np
         import matplotlib.pyplot as plt
         import matplotlib.colors as mcolors
+       
 
         FIG_W, FIG_H, DPI = 8.2, 4.6, 100  # stable sizing
 
-        num_cols = list(dfd.select_dtypes(include="number").columns)
-        cat_cols = list(dfd.select_dtypes(exclude="number").columns)
+        num_cols = list(dfd.select_dtypes(include=["number"]).columns)
+
+        # exclude numeric, datetime (tz and non-tz), and timedeltas just in case
+        cat_cols = list(
+            dfd.select_dtypes(exclude=["number", "datetime", "datetimetz", "timedelta"]).columns
+        )
 
         plot_slot = st.empty()
 
         if not num_cols or not cat_cols:
             st.info("Need at least one numeric and one categorical column.")
         else:
-            c1, c2, c3 = st.columns([1, 1, 1])
+            c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
             with c1:
                 num_col = st.selectbox("Numeric", num_cols, key="gs_prof_box_num")
             with c2:
@@ -1719,91 +1558,108 @@ def page_getting_started():
                     index=0,
                     key="gs_prof_box_palette",
                 )
+            with c4:
+                sort_by = st.selectbox("Sort", ["frequency", "median", "mean", "label"], index=0, key="gs_prof_box_sort")
 
-            # Top-10 categories by frequency (with data)
-            top = dfd[cat_col].astype("object").value_counts(dropna=True).head(10).index.tolist()
-            data = [
-                dfd.loc[dfd[cat_col].astype("object") == t, num_col].dropna().values
-                for t in top
-                if len(dfd.loc[dfd[cat_col].astype("object") == t, num_col].dropna()) > 0
-            ]
-            labels = [
-                t for t in top if len(dfd.loc[dfd[cat_col].astype("object") == t, num_col].dropna()) > 0
-            ]
+            # --- Prepare once (avoid repeated filtering/conversion) ---
+            tmp = dfd[[cat_col, num_col]].copy()
+            tmp["__cat__"] = tmp[cat_col].astype("object")
+            tmp = tmp.dropna(subset=["__cat__", num_col])
 
-            if not data:
+            if tmp.empty:
                 st.info("Not enough data to draw the boxplot.")
             else:
-                cmap = plt.get_cmap(palette_name)
-                n = len(data)
-                colors = [cmap(i / max(n - 1, 1)) for i in range(n)]
+                # top-10 categories by frequency
+                freq = tmp["__cat__"].value_counts()
+                top_keys = freq.head(10).index
 
-                fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), dpi=DPI)
+                top_df = tmp[tmp["__cat__"].isin(top_keys)]
 
-                bp = ax.boxplot(
-                    data,
-                    patch_artist=True,        # enable colorful fills
-                    labels=[str(x) for x in labels],
-                    showmeans=True,
-                    meanline=False,
-                    widths=0.6,
-                    whis=1.5,
+                # compute stats for sorting
+                stats = (
+                    top_df.groupby("__cat__")[num_col]
+                    .agg(count="size", mean="mean", median="median")
+                    .reset_index()
                 )
 
-                # Style boxes
-                for i, (box, col) in enumerate(zip(bp["boxes"], colors)):
-                    box.set_facecolor(col)
-                    box.set_alpha(0.6)
-                    edge = tuple(np.clip(np.array(mcolors.to_rgb(col)) * 0.55, 0, 1))
-                    box.set_edgecolor(edge)
-                    box.set_linewidth(1.4)
+                if sort_by == "frequency":
+                    stats = stats.sort_values("count", ascending=False)
+                elif sort_by == "median":
+                    stats = stats.sort_values("median", ascending=False)
+                elif sort_by == "mean":
+                    stats = stats.sort_values("mean", ascending=False)
+                else:  # label
+                    # safe string sort for mixed types
+                    stats["__label_str__"] = stats["__cat__"].astype(str)
+                    stats = stats.sort_values("__label_str__").drop(columns="__label_str__")
 
-                # Whiskers & caps
-                for whisk in bp["whiskers"]:
-                    whisk.set_color("#666")
-                    whisk.set_linewidth(1.0)
-                for cap in bp["caps"]:
-                    cap.set_color("#666")
-                    cap.set_linewidth(1.0)
+                labels = stats["__cat__"].tolist()
 
-                # Medians & means
-                for med in bp["medians"]:
-                    med.set_color("#1f1f1f")
-                    med.set_linewidth(1.6)
-                for mean in bp["means"]:
-                    mean.set_marker("o")
-                    mean.set_markerfacecolor("white")
-                    mean.set_markeredgecolor("#1f1f1f")
-                    mean.set_markersize(5)
+                # build data arrays in sorted order
+                grouped = {k: v[num_col].to_numpy() for k, v in top_df.groupby("__cat__")}
+                data = [grouped[k] for k in labels if k in grouped and len(grouped[k]) > 0]
 
-                # Optional: jittered raw points for depth
-                rng = np.random.default_rng(7)
-                for i, vals in enumerate(data, start=1):
-                    if len(vals) == 0:
-                        continue
-                    x = rng.normal(i, 0.06, size=len(vals))  # jitter around category index
-                    ax.scatter(
-                        x,
-                        vals,
-                        s=12,
-                        c=[colors[i - 1]],
-                        alpha=0.35,
-                        edgecolors="white",
-                        linewidths=0.3,
-                        zorder=2,
+                if not data:
+                    st.info("Not enough data to draw the boxplot.")
+                else:
+                    cmap = plt.get_cmap(palette_name)
+                    n = len(data)
+                    colors = [cmap(i / max(n - 1, 1)) for i in range(n)]
+
+                    # widen a bit if many categories
+                    fig_w = max(FIG_W, 6.8 + 0.25 * n)
+
+                    fig, ax = plt.subplots(figsize=(fig_w, FIG_H), dpi=DPI)
+
+                    bp = ax.boxplot(
+                        data,
+                        patch_artist=True,
+                        labels=[str(x) for x in labels],
+                        showmeans=True,
+                        meanline=False,
+                        widths=0.6,
+                        whis=1.5,
                     )
 
-                # Cosmetics
-                ax.set_title(f"{num_col} by {cat_col} (top {len(labels)})", pad=10)
-                ax.set_ylabel(num_col)
-                ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
-                for tick in ax.get_xticklabels():
-                    tick.set_rotation(15)
-                    tick.set_ha("right")
+                    # Style boxes
+                    for i, (box, col) in enumerate(zip(bp["boxes"], colors)):
+                        box.set_facecolor(col)
+                        box.set_alpha(0.6)
+                        edge = tuple(np.clip(np.array(mcolors.to_rgb(col)) * 0.55, 0, 1))
+                        box.set_edgecolor(edge)
+                        box.set_linewidth(1.4)
 
-                fig.tight_layout()
-                plot_slot.pyplot(fig, clear_figure=True)
+                    for whisk in bp["whiskers"]:
+                        whisk.set_color("#666"); whisk.set_linewidth(1.0)
+                    for cap in bp["caps"]:
+                        cap.set_color("#666"); cap.set_linewidth(1.0)
+                    for med in bp["medians"]:
+                        med.set_color("#1f1f1f"); med.set_linewidth(1.6)
+                    for mean in bp["means"]:
+                        mean.set_marker("o")
+                        mean.set_markerfacecolor("white")
+                        mean.set_markeredgecolor("#1f1f1f")
+                        mean.set_markersize(5)
 
+                    # jittered raw points
+                    rng = np.random.default_rng(7)
+                    for i, vals in enumerate(data, start=1):
+                        if len(vals) == 0:
+                            continue
+                        x = rng.normal(i, 0.06, size=len(vals))
+                        ax.scatter(
+                            x, vals, s=12, c=[colors[i - 1]],
+                            alpha=0.35, edgecolors="white", linewidths=0.3, zorder=2,
+                        )
+
+                    ax.set_title(f"{num_col} by {cat_col} (top {len(labels)})", pad=10)
+                    ax.set_ylabel(num_col)
+                    ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
+                    for tick in ax.get_xticklabels():
+                        tick.set_rotation(15); tick.set_ha("right")
+
+                    fig.tight_layout()
+                    plot_slot.pyplot(fig, clear_figure=True)
 
         # ========================== CONFIG PULL ==========================
         cfg = {
@@ -2044,7 +1900,6 @@ def page_getting_started():
             target_col = num_cols[0] if num_cols else dfd.columns[-1]
             st.session_state["target_col"] = target_col
 
-
         # make datetime index + sort + dedupe
         ts = dfd[[date_col, target_col]].copy()
         ts[date_col] = pd.to_datetime(ts[date_col], errors="coerce")
@@ -2149,7 +2004,6 @@ def page_getting_started():
                 X_out = None
             return y_out, X_out
 
-
         def _sanitize_future_exog_for_statsmodels(
             Xf: pd.DataFrame | None,
             cfg: dict,
@@ -2208,7 +2062,6 @@ def page_getting_started():
                 Xf = Xf.fillna(0.0)
 
             return Xf
-
 
         # m guess
         def _guess_m(freq_code: str | None) -> int:
@@ -2274,7 +2127,6 @@ def page_getting_started():
         from matplotlib.cm import get_cmap
         from statsmodels.tsa.stattools import acf, adfuller
         from statsmodels.stats.diagnostic import acorr_ljungbox
-
 
         PRIMARY_CMAP, GRID_ALPHA, LINE_W = "viridis", 0.25, 1.8
         PLOT_W,  PLOT_H  = 8.8, 3.0
@@ -2403,12 +2255,50 @@ def page_getting_started():
 
             # ---------- RIGHT: plots (stack + 2 bottom fillers) ----------
             with R2:
-                st.markdown("#### STL components")
+                # st.markdown("#### STL components")
+                # fig, axes = plt.subplots(4, 1, figsize=(PLOT_W, 5.8), sharex=True)
+                # cols = [get_cmap(PRIMARY_CMAP)(i) for i in (0.20, 0.40, 0.60, 0.80)]
+                # for ax, s, t, c in zip(
+                #     axes, [stl.observed, stl.trend, stl.seasonal, stl.resid],
+                #     ["Observed","Trend","Seasonal","Resid"], cols
+                # ):
+                #     ax.plot(s, lw=LINE_W, color=c); _theme_axes(ax, t)
+                # fig.tight_layout(); st.pyplot(fig, clear_figure=True)
+
+                # --- Header with hover tooltip ---
+                tooltip_html = (
+                    "<strong>STL = Seasonal and Trend decomposition using Loess</strong><br>"
+                    "<u>Components</u>:<br>"
+                    "• <em>Trend (Tₜ)</em> – long-term movement<br>"
+                    "• <em>Seasonal (Sₜ)</em> – repeating within-period pattern<br>"
+                    "• <em>Remainder/Residual (Rₜ)</em> – leftover noise/anomalies<br>"
+                    "<u>Model forms</u>:<br>"
+                    "Additive: yₜ = Tₜ + Sₜ + Rₜ<br>"
+                    "Multiplicative: yₜ = Tₜ × Sₜ × Rₜ"
+                )
+
+                st.markdown(
+                    f"""
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+                    <h4 style="margin:0;">Seasonal and Trend decomposition using Loess components</h4>
+                    <span title="{tooltip_html}" style="cursor:help;font-size:18px;">❓</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # --- Optional fallback for users who prefer clicking instead of hover ---
+                with st.popover("More about STL"):
+                    st.markdown(tooltip_html, unsafe_allow_html=True)
+
+                # --- Your existing plot ---
                 fig, axes = plt.subplots(4, 1, figsize=(PLOT_W, 5.8), sharex=True)
                 cols = [get_cmap(PRIMARY_CMAP)(i) for i in (0.20, 0.40, 0.60, 0.80)]
                 for ax, s, t, c in zip(
-                    axes, [stl.observed, stl.trend, stl.seasonal, stl.resid],
-                    ["Observed","Trend","Seasonal","Resid"], cols
+                    axes,
+                    [stl.observed, stl.trend, stl.seasonal, stl.resid],
+                    ["Observed","Trend","Seasonal","Resid"],
+                    cols,
                 ):
                     ax.plot(s, lw=LINE_W, color=c); _theme_axes(ax, t)
                 fig.tight_layout(); st.pyplot(fig, clear_figure=True)
@@ -2485,7 +2375,6 @@ def page_getting_started():
 
         METRIC_FUNS = {"RMSE": rmse, "MAE": mae, "MASE": mase, "MAPE": mape, "sMAPE": smape}
         primary_metric = cfg["metrics"][0] if cfg["metrics"] else "RMSE"
-
 
         # split indices for rolling CV
         y_cv = y_tr.dropna()
@@ -2591,7 +2480,6 @@ def page_getting_started():
                     res = mod.fit(disp=False); fc = res.forecast(steps=steps, exog=Xf)
                 return np.asarray(fc), res
 
-
             if model_name == "SARIMA":
                 P, D, Q = cfg["sarima"]["P"], cfg["sarima"]["D"], cfg["sarima"]["Q"]
                 p, d, q = cfg["sarima"]["p"], cfg["sarima"]["d"], cfg["sarima"]["q"]
@@ -2624,7 +2512,6 @@ def page_getting_started():
                     res = mod.fit(disp=False); fc = res.forecast(steps=steps, exog=Xf)
                 return np.asarray(fc), res
 
-
             if model_name == "Auto_ARIMA":
                 if not HAVE_PM:
                     mod = SARIMAX(y_train, order=(1, 1, 1))
@@ -2656,7 +2543,6 @@ def page_getting_started():
                                         max_d=pars.get("max_d", 2), max_D=pars.get("max_D", 1))
                     fc = ar.predict(n_periods=steps, X=Xf)
                 return np.asarray(fc), ar
-
 
             if model_name == "HWES":
                 # pattern from outer scope
@@ -2703,7 +2589,6 @@ def page_getting_started():
                 future = pd.DataFrame({"ds": pd.date_range(dfp["ds"].iloc[-1], periods=steps, freq=freq_str, inclusive="right")})
                 fc = mprop.predict(future)["yhat"].values
                 return np.asarray(fc), mprop
-
 
             # --------------------------- TBATS -----------------------------
             if model_name == "TBATS":
@@ -2783,7 +2668,6 @@ def page_getting_started():
                 Xf = Xf.fillna(0.0)
 
                 return _recursive_forecast_tree(model, y_train.values, Xtr, Xf, steps), model
-
 
             # --------------------------- TFT (Darts) -----------------------
             if model_name == "TFT":
@@ -2892,7 +2776,6 @@ def page_getting_started():
 # --------------------------- default naive ---------------------
             return np.repeat(y_train.iloc[-1], steps), None
 
-
         # perform CV
         rows = []
         model_names = [
@@ -2907,7 +2790,6 @@ def page_getting_started():
         if not model_names:
             st.warning("No models selected or required libraries are unavailable.")
             return   # this works because you're inside page_getting_started()
-
 
         for fold in range(folds):
             train_end = len(y_cv) - (folds - fold)*H - G
@@ -3122,7 +3004,6 @@ def page_getting_started():
             )
             st.dataframe(_hist_stats_disp, use_container_width=True, height=190)
             st.markdown("</div>", unsafe_allow_html=True)
-
 
         with r:
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -3359,126 +3240,7 @@ def page_getting_started():
 
         st.divider()    
 
-def render_one_pager():
-    """
-    One-pager runner:
-      1) Sidebar controls
-      2) Home header
-      3) Run analysis (page_getting_started)
-      4) Capture results into an LLM snapshot (Option A: reads from st.session_state)
-      5) Keep full-width CSS tweaks
-      6) Provide 'Open Decision Intelligence' modal button
-    """
-    
-    import streamlit as st
-
-    # --- Safe import: Decision Intelligence UI ---
-    try:
-        from decision_intelligence import run_di_chat
-    except Exception:
-        run_di_chat = None  # ensure name exists even if import fails
-
-    # --- Sidebar (Getting Started controls) ---
-    try:
-        sidebar_getting_started()
-    except Exception as e:
-        st.sidebar.error(f"Sidebar failed: {e}")
-
-    # --- Header / Home section ---
-    try:
-        page_home()
-    except Exception:
-        st.title("Forecast360")
-
-    # --- Run analysis, then write snapshot (Option A helper reads session_state) ---
-    try:
-        page_getting_started()  # this should populate st.session_state with results
-        # Option A: module-level helper you added earlier
-        try:
-            gather_and_snapshot_forecast360(page_name="One Pager", run_tag="one-pager")
-        except Exception as e:
-            st.info(f"Snapshot skipped: {e}")
-    except Exception as e:
-        st.error(f"Error rendering Getting Started: {e}")
-
-    # --- Full-width Layout (idempotent CSS injection) ---
-    try:
-        if not st.session_state.get("_css_full_width_injected"):
-            st.markdown(
-                """
-                <style>
-                section.main > div.block-container{
-                    max-width:100% !important;
-                    padding-left:12px; padding-right:12px;
-                }
-                .main .block-container{max-width:100% !important;}
-                [data-testid=stAppViewContainer] .block-container{max-width:100% !important;}
-                [data-testid=stToolbar]{right:8px;}
-                [data-testid=stSidebar] .block-container{padding:0.5rem 0.5rem;}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.session_state["_css_full_width_injected"] = True
-    except Exception:
-        pass
-
-    # --- Decision Intelligence modal launcher ---
-    st.session_state.setdefault("di_modal_open", False)
-
-    _di_modal = None
-    if hasattr(st, "dialog") and callable(getattr(st, "dialog")) and run_di_chat is not None:
-        @st.dialog("🧠 Decision Intelligence", width="large")
-        def _di_modal():
-            st.caption("Chat over your latest KnowledgeBase snapshot.")
-            try:
-                # compact UI inside modal; DI itself discovers latest snapshot
-                run_di_chat(popover_mode=True)
-            except Exception as e:
-                st.error(f"Decision Intelligence failed: {e}")
-            if st.button("Close", type="secondary"):
-                st.session_state["di_modal_open"] = False
-                st.rerun()
-
-    # Launcher button (place anywhere on the page)
-    if st.button("🧠 Open Decision Intelligence", type="primary", help="Open chat over the latest snapshot"):
-        st.session_state["di_modal_open"] = True
-
-    # Show modal (or fallback if dialog not available / import failed)
-    if st.session_state["di_modal_open"]:
-        if _di_modal is not None:
-            _di_modal()
-        else:
-            try:
-                # If you have a dedicated page fallback
-                st.switch_page("pages/Decision Intelligence.py")
-            except Exception:
-                st.warning(
-                    "This build lacks `st.dialog`, and a DI page isn't available. "
-                    "Create 'pages/Decision Intelligence.py' and call run_di_chat()."
-                )
-
-
-# ============== Run ==============
-render_one_pager()
-
-
-# ============================================================================
-# Forecast360: Performance & Safety Utilities (drop-in, non-breaking)
-# This block adds vectorized imputation, batch exog builder, optional Numba-accelerated
-# recursive forecasting, joblib parallel evaluation, centralized lazy imports,
-# uniform logging/warnings, faster Arrow sanitizer, light param validation, and caching helpers.
-# ============================================================================
-
-# ---- Uniform logger & warn() ------------------------------------------------
-_logger = logging.getLogger("forecast360")
-if not _logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-    _logger.addHandler(_h)
-# Keep INFO as default to avoid noisy logs; adjust via env if needed.
-if _logger.level == logging.NOTSET:
-    _logger.setLevel(logging.INFO)
+# [removed: Decision Intelligence block]
 
 def warn(msg: str):
     try:
@@ -3775,4 +3537,53 @@ def validate_hyperparams(params: dict) -> None:
         warn("Could not fully validate hyperparameters; proceeding with defaults.")
         return
 
-# ============================================================================
+# ============================== Runner ==============================
+def _render_app():
+    import streamlit as st
+
+    # Page meta (safe to call once)
+    try:
+        st.set_page_config(page_title="Forecast360", page_icon="📈", layout="wide")
+    except Exception:
+        pass  # Streamlit may rerun; ignore duplicate set_page_config
+
+    # Sidebar & main sections
+    try:
+        sidebar_getting_started()
+    except Exception as e:
+        st.sidebar.error(f"Sidebar failed: {e}")
+
+    try:
+        page_home()
+    except Exception:
+        st.title("Forecast360")
+
+    try:
+        page_getting_started()
+    except Exception as e:
+        st.error(f"Error rendering Getting Started: {e}")
+
+    # Full-width CSS (idempotent)
+    try:
+        if not st.session_state.get("_css_full_width_injected"):
+            st.markdown(
+                """
+                <style>
+                section.main > div.block-container{
+                    max-width:100% !important;
+                    padding-left:12px; padding-right:12px;
+                }
+                .main .block-container{max-width:100% !important;}
+                [data-testid=stAppViewContainer] .block-container{max-width:100% !important;}
+                [data-testid=stToolbar]{right:8px;}
+                [data-testid=stSidebar] .block-container{padding:0.5rem 0.5rem;}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.session_state["_css_full_width_injected"] = True
+    except Exception:
+        pass
+
+# Execute immediately when script runs under `streamlit run`
+_render_app()
