@@ -1,37 +1,32 @@
-# ===== Core (UI + data) =====
-streamlit>=1.36,<1.40
-pandas>=2.2,<3.0
-numpy>=1.26,<3.0
-pyarrow>=15,<19
-matplotlib>=3.8,<3.10
-plotly>=5.20,<6.0
-pillow>=10,<12
-python-dateutil>=2.8,<3.0
-lxml>=5.2,<6.0           # enables pandas.read_xml
-openpyxl>=3.1,<4.0       # read/write .xlsx
-xlrd>=2.0,<3.0           # read legacy .xls
-jsonschema>=4.21,<5.0
+# Core app
+streamlit==1.39.1
+pandas==2.3.3
+numpy==2.3.3
+pyarrow==18.1.0
+matplotlib==3.9.4
+plotly==5.24.1
+pillow==11.3.0
+python-dateutil==2.9.0.post0
+lxml==5.4.0
+openpyxl==3.1.5
+xlrd==2.0.2
+jsonschema==4.25.1
 
-# ===== Modeling (lightweight) =====
-scikit-learn>=1.4,<1.6
-statsmodels>=0.14,<0.15
-pmdarima>=2.0,<3.0
+# ML stack
+scikit-learn==1.5.2
+statsmodels==0.14.5
 
-# ===== Decision Intelligence / LLMs =====
-openai>=1.30,<2.0
-anthropic>=0.30,<1.0
-tiktoken>=0.7,<0.8
-langchain>=0.2,<0.3
-langchain-community>=0.2,<0.3
-faiss-cpu>=1.8,<1.9
-pypdf>=4.2,<5.0          # parse PDFs into KnowledgeBase
-markdown>=3.6,<4.0       # render/clean KB notes
-
-# ===== Optional (LOCAL ONLY – may be heavy/slow to build on Streamlit Cloud) =====
-# prophet>=1.1            # requires compiler + cmdstan/prophet build
-# darts>=0.29             # pulls in torch (very heavy); expect cloud build failures
-# xgboost>=2.0
-# lightgbm>=4.3
-# statsforecast>=1.7      # depends on numba; works locally, may be slow in cloud
-# sentence-transformers>=3.0  # alternative embeddings for KB (heavy)
-# unstructured>=0.15      # advanced document loaders (heavy)
+# ---- Optional (commented) ----
+# Auto-ARIMA (often compiles from source; may fail/slow on Cloud for Python 3.13):
+# pmdarima==2.0.4
+#
+# If you later re-enable Decision Intelligence, add your LLM deps back:
+# openai==1.109.1
+# anthropic==0.69.0
+# tiktoken==0.7.0
+# langchain==0.2.17
+# langchain-community==0.2.19
+#
+# FAISS (vector search) – incompatible pins caused your build to fail on Py3.13.
+# If truly needed, prefer a Py3.13-compatible version:
+# faiss-cpu==1.11.0
