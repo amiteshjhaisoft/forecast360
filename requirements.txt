@@ -5,7 +5,7 @@ numpy==2.3.3
 pyarrow==18.1.0
 matplotlib==3.9.4
 plotly==5.24.1
-pillow==11.3.0
+pillow==10.4.0          # <-- downgraded to satisfy streamlit<1.40
 python-dateutil==2.9.0.post0
 lxml==5.4.0
 openpyxl==3.1.5
@@ -17,16 +17,14 @@ scikit-learn==1.5.2
 statsmodels==0.14.5
 
 # ---- Optional (commented) ----
-# Auto-ARIMA (often compiles from source; may fail/slow on Cloud for Python 3.13):
+# Auto-ARIMA can be slow to build on Cloud:
 # pmdarima==2.0.4
-#
-# If you later re-enable Decision Intelligence, add your LLM deps back:
+
+# DI/vector deps (only add if you re-enable those features):
 # openai==1.109.1
 # anthropic==0.69.0
 # tiktoken==0.7.0
 # langchain==0.2.17
 # langchain-community==0.2.19
-#
-# FAISS (vector search) – incompatible pins caused your build to fail on Py3.13.
-# If truly needed, prefer a Py3.13-compatible version:
+# For FAISS on Py3.13, use a modern wheel:
 # faiss-cpu==1.11.0
