@@ -790,8 +790,8 @@ def sidebar_getting_started():
             st.image(
                 "assets/isoft_logo.png",
                 caption="iSOFT ANZ Pvt Ltd",
-                # use_column_width=True,
-                use_container_width=True,
+                use_column_width=True,
+                # use_container_width=True,
             )
 
         st.subheader("🚀 Getting Started")
