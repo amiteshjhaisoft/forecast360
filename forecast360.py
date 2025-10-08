@@ -3339,10 +3339,11 @@ def _render_app():
 # Execute immediately when script runs under `streamlit run`
 _render_app()
 
+
 # ========================== SNAPSHOT FOR KB (ALL CONTENT, DEDUPED, SUMMARIZED) ==========================
 # Drop this WHOLE block at the VERY END of your file. It:
 # - Patches Streamlit renderers to capture exactly-what-was-shown (tables, plots, images, text, metrics).
-# - On button click, OVERWRITES the KB folder you configured in the sidebar (session_state["base_folder"]).
+# - On button click, OVERWRITES the KB/ folder next to this file in your GitHub repo.
 # - De-duplicates by content hash, adds captions/sections, writes README.md + index.html,
 #   and creates meta/summary.json + text/overview.md for LLM-friendly grounding (facts only).
 #
@@ -3566,13 +3567,19 @@ def _kb_safe(s: str) -> str:
     return "".join(c if c.isalnum() or c in "._- " else "_" for c in str(s))[:120].strip("_")
 
 def _kb_root():
-    # Use the app's configured KB folder from the sidebar
-    base = _st.session_state.get("base_folder") if _st is not None else None
-    from pathlib import Path; import shutil, os
-    root = Path(base).resolve() if base else Path.cwd() / "KB"
+    """
+    GitHub-repo friendly base: always use a KB/ folder alongside THIS file.
+    Overwrites KB/ on each capture.
+    """
+    from pathlib import Path
+    import shutil
+    repo_root = Path(__file__).parent.resolve()
+    root = repo_root / "KB"
     try:
-        if root.exists(): shutil.rmtree(root)
-    except Exception: pass
+        if root.exists():
+            shutil.rmtree(root)
+    except Exception:
+        pass
     for p in ("tables","plots/mpl","plots/plotly","plots/altair","images","text","meta"):
         (root/p).mkdir(parents=True, exist_ok=True)
     return root
@@ -3601,7 +3608,7 @@ def _kb__write_derivative_summaries(root, items):
         for t in cap_tables:
             name, df = t[0], t[1]
             cols = [str(c).lower() for c in getattr(df, "columns", [])]
-            if not cols or len(df)==0: 
+            if not cols or len(df)==0:
                 continue
             # leaderboard?
             if any("model" in c or "algo" in c for c in cols) and any(m in cols for m in ("rmse","mae","mape","r2","smape","mase")):
@@ -3613,7 +3620,7 @@ def _kb__write_derivative_summaries(root, items):
                     lk = str(k).lower()
                     if lk in ("rmse","mae","mape","r2","smape","mase"):
                         metrics[lk] = v
-                if best or metrics: 
+                if best or metrics:
                     break
             # forecast-like?
             if ("yhat" in cols or "forecast" in cols or "prediction" in cols) and ("ds" in cols or "date" in cols or "timestamp" in cols):
@@ -3631,7 +3638,7 @@ def _kb__write_derivative_summaries(root, items):
                     val = r.get("value")
                     if key in ("rmse","mae","mape","r2","smape","mase","std","mean"):
                         mm[key] = val
-                if mm: 
+                if mm:
                     resid = {"metrics": mm, "from_table": name}
     except Exception:
         pass
@@ -3749,7 +3756,7 @@ def _kb__normalize_buckets(ss):
 # ---- main capture (DEDUPED + RESET) ----
 def _kb_capture_now():
     if _st is None: return
-    import json, time, io, hashlib, html
+    import json, time, io, hashlib, html, os
     from pathlib import Path
 
     # normalize old-format tuples to the new shape
@@ -3855,7 +3862,7 @@ def _kb_capture_now():
             try:
                 if kind == "pil":
                     b = _io.BytesIO(); payload.save(b, format="PNG"); data = b.getvalue()
-                    d = h_bytes(data); 
+                    d = h_bytes(data)
                     if d not in img_map: img_map[d] = (name, "png", data, section)
                 elif kind == "ndarray":
                     im = Image.fromarray(payload); b = _io.BytesIO(); im.save(b, format="PNG")
@@ -3900,7 +3907,16 @@ def _kb_capture_now():
         p.write_text("\n".join(lines), encoding="utf-8"); items.append({"type":"text_md","path":str(p),"name":"metrics","section":"Page"})
 
     # -------- README.md + index.html (friendly, thumbnails/previews) --------
-    import html as _html
+    import html as _html, os as _os
+    from pathlib import Path as _Path
+
+    def _rel(path_abs: str) -> str:
+        """Make path relative to KB root for GitHub-friendly links."""
+        try:
+            return _os.path.relpath(path_abs, root)
+        except Exception:
+            return _Path(path_abs).name
+
     sections = {}
     for it in items:
         sec = it.get("section") or "Page"
@@ -3918,17 +3934,16 @@ def _kb_capture_now():
     readme = [f"# KB Snapshot ({time.strftime('%Y-%m-%d %H:%M:%S')})", "", "## Overview"]
     for k, v in counts.items():
         readme.append(f"- **{k.capitalize()}**: {v}")
-    from pathlib import Path as _Path
     for sec, group in sections.items():
         readme.append(f"\n## {sec}")
         for t in [x for x in group if x["type"]=="table_csv"]:
             cols = ", ".join(t.get("columns", [])[:10])
-            readme.append(f"- Table: `{_Path(t['path']).name}`  — rows: {t.get('rows','?')}, cols: {len(t.get('columns', []))}; columns: {cols}")
+            readme.append(f"- Table: `{_Path(_rel(t['path'])).name}`  — rows: {t.get('rows','?')}, cols: {len(t.get('columns', []))}; columns: {cols}")
         for pth in [x for x in group if x["type"].startswith("plot") or x["type"].startswith("image")]:
             cap = pth.get("caption") or pth.get("name") or _Path(pth["path"]).name
-            readme.append(f"- Figure: `{_Path(pth['path']).name}` — {cap}")
+            readme.append(f"- Figure: `{_Path(_rel(pth['path'])).name}` — {cap}")
         for tx in [x for x in group if x["type"].startswith("text")]:
-            readme.append(f"- Text: `{_Path(tx['path']).name}`")
+            readme.append(f"- Text: `{_Path(_rel(tx['path'])).name}`")
     (root / "README.md").write_text("\n".join(readme), encoding="utf-8")
 
     # index.html
@@ -3956,10 +3971,14 @@ def _kb_capture_now():
             html_parts.append("<div class='grid'>")
             for f in figs:
                 cap = _html.escape((f.get("caption") or f.get("name") or _Path(f["path"]).name))
-                rel = _Path(f["path"]).as_posix()
+                rel = _rel(f["path"]).replace("\\", "/")
+                # For non-image HTML/spec types, we still show a clickable link (no inline preview)
+                img_src = rel if rel.lower().endswith((".png",".jpg",".jpeg",".gif",".webp")) else ""
+                preview = (f"<img src='{rel}' alt='{cap}'/>" if img_src else
+                           "<div class='muted'>Preview unavailable (open file)</div>")
                 html_parts.append(
                     f"<div class='card'><div class='type'>{_html.escape(f['type'])}</div>"
-                    f"<a href='{rel}' target='_blank'><img src='{rel}' alt='{cap}'/></a>"
+                    f"<a href='{rel}' target='_blank'>{preview}</a>"
                     f"<div class='muted'>{cap}</div>"
                     f"<div class='muted'><code>{_html.escape(_Path(rel).name)}</code></div></div>"
                 )
@@ -3968,9 +3987,9 @@ def _kb_capture_now():
         if tbls:
             html_parts.append("<h3>Tables</h3>")
             for t in tbls:
-                rel = _Path(t["path"]).as_posix()
+                rel = _rel(t["path"]).replace("\\", "/")
                 try:
-                    with open(rel, "r", encoding="utf-8") as fh:
+                    with open(root / rel, "r", encoding="utf-8") as fh:
                         lines = [next(fh).rstrip("\n") for _ in range(8)]
                     cells = [ln.split(",") for ln in lines]
                     head = cells[0] if cells else []
@@ -3990,7 +4009,7 @@ def _kb_capture_now():
         if texts:
             html_parts.append("<h3>Text</h3><div class='grid'>")
             for tx in texts:
-                rel = _Path(tx["path"]).as_posix()
+                rel = _rel(tx["path"]).replace("\\", "/")
                 html_parts.append(
                     f"<div class='card'><div class='type'>text</div>"
                     f"<div><a href='{rel}' target='_blank'>{_html.escape(_Path(rel).name)}</a></div></div>"
@@ -4024,7 +4043,7 @@ def _kb_capture_now():
             if key in ss: ss[key].clear()
         except Exception: pass
 
-    # trigger re-index on next render (your app's auto-index watches base_folder)
+    # trigger re-index on next render (your app's auto-index watches KB/)
     try:
         _st.session_state["_kb_last_sig"] = None
     except Exception:
@@ -4043,3 +4062,709 @@ if _st is not None and _st.session_state.get("_cap_patched", False):
         _kb_capture_now()
         _st.rerun()
 # =========================================================================================
+
+
+# # ========================== SNAPSHOT FOR KB (ALL CONTENT, DEDUPED, SUMMARIZED) ==========================
+# # Drop this WHOLE block at the VERY END of your file. It:
+# # - Patches Streamlit renderers to capture exactly-what-was-shown (tables, plots, images, text, metrics).
+# # - On button click, OVERWRITES the KB folder you configured in the sidebar (session_state["base_folder"]).
+# # - De-duplicates by content hash, adds captions/sections, writes README.md + index.html,
+# #   and creates meta/summary.json + text/overview.md for LLM-friendly grounding (facts only).
+# #
+# # HOW TO LABEL SECTIONS IN YOUR PAGE (optional):
+# #   kb_set_section("Leaderboard")
+# #   ... render plots/tables ...
+# #
+# # A "📸 Capture Snapshot…" button will appear in the sidebar and inline; click it anytime.
+
+# # ---- safe import ----
+# try:
+#     import streamlit as _st
+# except Exception:
+#     _st = None
+
+# # ---- public helper: set current logical section to group outputs in the report ----
+# def kb_set_section(name: str):
+#     try:
+#         _st.session_state["_cap_section"] = str(name).strip()[:200] or "Page"
+#     except Exception:
+#         pass
+
+# # ---- internal helpers to extract figure captions (best-effort, real objects only) ----
+# def _kb_caption_mpl(fig):
+#     try:
+#         st = getattr(fig, "_suptitle", None)
+#         if st is not None and getattr(st, "get_text", None):
+#             t = st.get_text()
+#             if t: return t
+#         for ax in fig.axes:
+#             t = getattr(ax, "get_title", lambda: "")()
+#             if t: return t
+#     except Exception:
+#         pass
+#     return "Matplotlib figure"
+
+# def _kb_caption_plotly(fig):
+#     try:
+#         t = fig.layout.title.text
+#         if t: return t
+#     except Exception:
+#         pass
+#     return "Plotly figure"
+
+# def _kb_caption_altair(ch):
+#     try:
+#         t = ch.title
+#         if isinstance(t, str) and t.strip():
+#             return t
+#         if hasattr(t, "to_dict"):
+#             d = t.to_dict(); tt = d.get("text") or d.get("name")
+#             if tt: return str(tt)
+#     except Exception:
+#         pass
+#     return "Altair chart"
+
+# def _kb_now_section():
+#     try:
+#         return _st.session_state.get("_cap_section") or "Page"
+#     except Exception:
+#         return "Page"
+
+# # ---- registry for captured artifacts ----
+# def _kb_reg():
+#     if _st is None: return {}
+#     ss = _st.session_state
+#     ss.setdefault("_cap_tables", [])          # [(name, DataFrame, section)]
+#     ss.setdefault("_cap_mpl_png", [])         # [(name, png_bytes, section, caption)]
+#     ss.setdefault("_cap_plotly", [])          # [(name, go.Figure, section, caption)]
+#     ss.setdefault("_cap_altair", [])          # [(name, alt.Chart, section, caption)]
+#     ss.setdefault("_cap_images", [])          # [(name, "pil"/"ndarray"/"url", payload, section)]
+#     ss.setdefault("_cap_texts", [])           # [(name, text, section)]
+#     ss.setdefault("_cap_metrics", [])         # [(label, value, delta)]
+#     return ss
+
+# # ---- patch Streamlit renderers to capture WHAT WAS SHOWN ----
+# def _kb_patch_renderers():
+#     if _st is None: return
+#     ss = _kb_reg()
+#     if ss.get("_cap_patched"): return
+
+#     # ---------- text helper ----------
+#     def _push_texts(*args):
+#         for x in args:
+#             if isinstance(x, str) and x.strip():
+#                 _st.session_state["_cap_texts"].append(("text", x, _kb_now_section()))
+
+#     # ---------- table / dataframe ----------
+#     if hasattr(_st, "table"):
+#         _orig_table = _st.table
+#         def _wrap_table(data, *a, **k):
+#             try:
+#                 import pandas as pd
+#                 df = data if getattr(data, "__class__", None).__name__ == "DataFrame" else pd.DataFrame(data)
+#                 _st.session_state["_cap_tables"].append(("table", df, _kb_now_section()))
+#             except Exception: pass
+#             return _orig_table(data, *a, **k)
+#         _st.table = _wrap_table
+
+#     if hasattr(_st, "dataframe"):
+#         _orig_dataframe = _st.dataframe
+#         def _wrap_dataframe(data, *a, **k):
+#             try:
+#                 import pandas as pd
+#                 df = data if getattr(data, "__class__", None).__name__ == "DataFrame" else pd.DataFrame(data)
+#                 _st.session_state["_cap_tables"].append(("dataframe", df, _kb_now_section()))
+#             except Exception: pass
+#             return _orig_dataframe(data, *a, **k)
+#         _st.dataframe = _wrap_dataframe
+
+#     # ---------- matplotlib (grab PNG BYTES BEFORE Streamlit clears figure) ----------
+#     if hasattr(_st, "pyplot"):
+#         _orig_pyplot = _st.pyplot
+#         def _mpl_has_content(fig) -> bool:
+#             try:
+#                 if not getattr(fig, "axes", None): return False
+#                 for ax in fig.axes:
+#                     if getattr(ax, "has_data", lambda: False)(): return True
+#                     if getattr(ax, "images", None) and ax.images: return True
+#                     if getattr(ax, "lines", None) and ax.lines: return True
+#                     if getattr(ax, "collections", None) and ax.collections: return True
+#                     if getattr(ax, "patches", None) and sum(p.get_visible() for p in ax.patches) > 1: return True
+#                 return False
+#             except Exception:
+#                 return True
+#         def _wrap_pyplot(fig=None, *a, **k):
+#             import io
+#             try:
+#                 import matplotlib, matplotlib.pyplot as plt
+#                 try: matplotlib.use("Agg", force=False)
+#                 except Exception: pass
+#                 if fig is None:
+#                     fig = plt.gcf()
+#                 if fig is not None and _mpl_has_content(fig):
+#                     caption = _kb_caption_mpl(fig)
+#                     fig.canvas.draw()
+#                     buf = io.BytesIO()
+#                     fig.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+#                     buf.seek(0)
+#                     _st.session_state["_cap_mpl_png"].append(("pyplot", buf.read(), _kb_now_section(), caption))
+#             except Exception: pass
+#             return _orig_pyplot(fig, *a, **k)
+#         _st.pyplot = _wrap_pyplot
+
+#     # ---------- plotly ----------
+#     if hasattr(_st, "plotly_chart"):
+#         _orig_plotly = _st.plotly_chart
+#         def _wrap_plotly(fig, *a, **k):
+#             try:
+#                 import plotly.graph_objects as go
+#                 if isinstance(fig, go.Figure):
+#                     _st.session_state["_cap_plotly"].append(("plotly_chart", fig, _kb_now_section(), _kb_caption_plotly(fig)))
+#             except Exception: pass
+#             return _orig_plotly(fig, *a, **k)
+#         _st.plotly_chart = _wrap_plotly
+
+#     # ---------- altair ----------
+#     if hasattr(_st, "altair_chart"):
+#         _orig_altair = _st.altair_chart
+#         def _wrap_altair(chart, *a, **k):
+#             try:
+#                 import altair as alt
+#                 if isinstance(chart, alt.Chart):
+#                     _st.session_state["_cap_altair"].append(("altair_chart", chart, _kb_now_section(), _kb_caption_altair(chart)))
+#             except Exception: pass
+#             return _orig_altair(chart, *a, **k)
+#         _st.altair_chart = _wrap_altair
+
+#     # ---------- images ----------
+#     if hasattr(_st, "image"):
+#         _orig_image = _st.image
+#         def _wrap_image(image, *a, **k):
+#             try:
+#                 import numpy as np
+#                 from PIL import Image as PILImage
+#                 if isinstance(image, PILImage):
+#                     _st.session_state["_cap_images"].append(("image", "pil", image.copy(), _kb_now_section()))
+#                 elif isinstance(image, np.ndarray):
+#                     _st.session_state["_cap_images"].append(("image", "ndarray", image.copy(), _kb_now_section()))
+#                 elif isinstance(image, str):
+#                     _st.session_state["_cap_images"].append(("image", "url", image, _kb_now_section()))
+#             except Exception: pass
+#             return _orig_image(image, *a, **k)
+#         _st.image = _wrap_image
+
+#     # ---------- text / markdown / titles ----------
+#     for _name in ("write","markdown","caption","text","subheader","header","title","info","warning","error","success"):
+#         if hasattr(_st, _name):
+#             _orig = getattr(_st, _name)
+#             def _factory(orig):
+#                 def _wrapped(*a, **k):
+#                     try: _push_texts(*a)
+#                     except Exception: pass
+#                     return orig(*a, **k)
+#                 return _wrapped
+#             setattr(_st, _name, _factory(_orig))
+
+#     # ---------- metrics ----------
+#     if hasattr(_st, "metric"):
+#         _orig_metric = _st.metric
+#         def _wrap_metric(label, value, delta=None, *a, **k):
+#             try:
+#                 _st.session_state["_cap_metrics"].append((str(label), str(value), None if delta is None else str(delta)))
+#             except Exception: pass
+#             return _orig_metric(label, value, delta, *a, **k)
+#         _st.metric = _wrap_metric
+
+#     ss["_cap_patched"] = True
+#     ss["_cap_just_patched"] = True
+
+# # ---- run patch once & force a single rerun so hooks apply to the next render ----
+# if _st is not None:
+#     _kb_patch_renderers()
+#     if _st.session_state.get("_cap_just_patched"):
+#         _st.session_state["_cap_just_patched"] = False
+#         try: _st.rerun()
+#         except Exception: pass
+
+# # ----------------------------- SNAPSHOT WRITER -----------------------------------
+# def _kb_safe(s: str) -> str:
+#     return "".join(c if c.isalnum() or c in "._- " else "_" for c in str(s))[:120].strip("_")
+
+# def _kb_root():
+#     # Use the app's configured KB folder from the sidebar
+#     base = _st.session_state.get("base_folder") if _st is not None else None
+#     from pathlib import Path; import shutil, os
+#     root = Path(base).resolve() if base else Path.cwd() / "KB"
+#     try:
+#         if root.exists(): shutil.rmtree(root)
+#     except Exception: pass
+#     for p in ("tables","plots/mpl","plots/plotly","plots/altair","images","text","meta"):
+#         (root/p).mkdir(parents=True, exist_ok=True)
+#     return root
+
+# # ---- derivative factual summaries (for LLMs; no hallucination) ----
+# def _kb__write_derivative_summaries(root, items):
+#     import json, html as _html
+#     from pathlib import Path
+#     ss = _st.session_state if _st is not None else {}
+
+#     # Totals
+#     counts = {
+#         "tables": sum(1 for it in items if it["type"]=="table_csv"),
+#         "mpl":    sum(1 for it in items if it.get("lib")=="matplotlib"),
+#         "plotly": sum(1 for it in items if it.get("lib")=="plotly"),
+#         "altair": sum(1 for it in items if it.get("lib")=="altair" or it["type"]=="plot_spec"),
+#         "images": sum(1 for it in items if it["type"].startswith("image")),
+#         "text":   sum(1 for it in items if it["type"].startswith("text")),
+#     }
+
+#     # Try to find a "leaderboard-like" table for best model/metrics (purely heuristic, factual)
+#     best = {}; metrics = {}; forecast = {}; resid = {}
+#     try:
+#         import pandas as pd
+#         cap_tables = list(ss.get("_cap_tables", []))
+#         for t in cap_tables:
+#             name, df = t[0], t[1]
+#             cols = [str(c).lower() for c in getattr(df, "columns", [])]
+#             if not cols or len(df)==0: 
+#                 continue
+#             # leaderboard?
+#             if any("model" in c or "algo" in c for c in cols) and any(m in cols for m in ("rmse","mae","mape","r2","smape","mase")):
+#                 row0 = df.iloc[0].to_dict()
+#                 model_col = next((c for c in df.columns if str(c).lower() in ("model","algo","algorithm","estimator","name")), None)
+#                 if model_col:
+#                     best = {"model": str(row0.get(model_col)), "from_table": name}
+#                 for k, v in row0.items():
+#                     lk = str(k).lower()
+#                     if lk in ("rmse","mae","mape","r2","smape","mase"):
+#                         metrics[lk] = v
+#                 if best or metrics: 
+#                     break
+#             # forecast-like?
+#             if ("yhat" in cols or "forecast" in cols or "prediction" in cols) and ("ds" in cols or "date" in cols or "timestamp" in cols):
+#                 date_col = next((c for c in df.columns if str(c).lower() in ("ds","date","timestamp")), None)
+#                 if date_col is not None:
+#                     ds = pd.to_datetime(df[date_col], errors="coerce").dropna()
+#                     if len(ds)>0:
+#                         forecast = {"rows": int(len(ds)), "start_date": str(ds.min().date()), "end_date": str(ds.max().date()), "from_table": name}
+#             # residuals summary?
+#             if set(("metric","value")).issubset(set(cols)):
+#                 tmp = df.copy(); tmp.columns = [str(c).lower() for c in tmp.columns]
+#                 mm = {}
+#                 for _, r in tmp.iterrows():
+#                     key = str(r.get("metric","")).lower()
+#                     val = r.get("value")
+#                     if key in ("rmse","mae","mape","r2","smape","mase","std","mean"):
+#                         mm[key] = val
+#                 if mm: 
+#                     resid = {"metrics": mm, "from_table": name}
+#     except Exception:
+#         pass
+
+#     summary = {
+#         "totals": counts,
+#         "best_model": best,
+#         "metrics": metrics,
+#         "forecast": forecast,
+#         "residuals_summary": resid,
+#     }
+#     (root / "meta").mkdir(parents=True, exist_ok=True)
+#     (root / "meta" / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+#     # overview.md (human-readable, factual)
+#     lines = ["# Snapshot Overview (factual)", ""]
+#     lines.append(f"- Tables: **{counts['tables']}**  |  Matplotlib: **{counts['mpl']}**  |  Plotly: **{counts['plotly']}**  |  Altair: **{counts['altair']}**  |  Images: **{counts['images']}**  |  Text: **{counts['text']}**")
+#     if best:
+#         src = best.get("from_table", "")
+#         lines.append(f"- Best model: **{best.get('model','-')}**" + (f"  _(source: {src})_" if src else ""))
+#     if metrics:
+#         lines.append("- Key metrics:")
+#         for k, v in metrics.items():
+#             lines.append(f"  - **{k.upper()}**: {v}")
+#     if forecast:
+#         lines.append(f"- Forecast horizon: **{forecast.get('rows','?')}** rows")
+#         if forecast.get("start_date") and forecast.get("end_date"):
+#             lines.append(f"  - Range: {forecast['start_date']} → {forecast['end_date']}")
+#         if forecast.get("from_table"):
+#             lines.append(f"  - Source table: `{forecast['from_table']}`")
+#     if resid.get("metrics"):
+#         lines.append("- Residuals summary (selected):")
+#         for k, v in resid["metrics"].items():
+#             lines.append(f"  - **{k}**: {v}")
+#         if resid.get("from_table"):
+#             lines.append(f"  - Source table: `{resid['from_table']}`")
+#     (root / "text" / "overview.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+#     return [
+#         {"type":"json","name":"summary","path":str((root / "meta" / "summary.json").as_posix())},
+#         {"type":"text_md","name":"overview","path":str((root / "text" / "overview.md").as_posix())},
+#     ]
+
+
+# # ---- BACKWARD-COMPAT: normalize old bucket tuples to the new shape ----
+# def _kb__normalize_buckets(ss):
+#     """Ensure all capture buckets have (name, payload, section[, caption]) tuples."""
+#     # tables: (name, df) -> (name, df, section)
+#     if "_cap_tables" in ss:
+#         out = []
+#         for t in list(ss["_cap_tables"]):
+#             if len(t) >= 3:
+#                 out.append((t[0], t[1], t[2]))
+#             elif len(t) == 2:
+#                 out.append((t[0], t[1], _kb_now_section()))
+#         ss["_cap_tables"] = out
+
+#     # mpl: (name, png) -> (name, png, section, caption)
+#     if "_cap_mpl_png" in ss:
+#         out = []
+#         for t in list(ss["_cap_mpl_png"]):
+#             if len(t) >= 4:
+#                 out.append((t[0], t[1], t[2], t[3]))
+#             elif len(t) == 3:
+#                 out.append((t[0], t[1], t[2], "Matplotlib figure"))
+#             elif len(t) == 2:
+#                 out.append((t[0], t[1], _kb_now_section(), "Matplotlib figure"))
+#         ss["_cap_mpl_png"] = out
+
+#     # plotly: (name, fig) -> (name, fig, section, caption)
+#     if "_cap_plotly" in ss:
+#         out = []
+#         for t in list(ss["_cap_plotly"]):
+#             if len(t) >= 4:
+#                 out.append((t[0], t[1], t[2], t[3]))
+#             elif len(t) == 3:
+#                 out.append((t[0], t[1], t[2], _kb_caption_plotly(t[1])))
+#             elif len(t) == 2:
+#                 out.append((t[0], t[1], _kb_now_section(), _kb_caption_plotly(t[1])))
+#         ss["_cap_plotly"] = out
+
+#     # altair: (name, chart) -> (name, chart, section, caption)
+#     if "_cap_altair" in ss:
+#         out = []
+#         for t in list(ss["_cap_altair"]):
+#             if len(t) >= 4:
+#                 out.append((t[0], t[1], t[2], t[3]))
+#             elif len(t) == 3:
+#                 out.append((t[0], t[1], t[2], _kb_caption_altair(t[1])))
+#             elif len(t) == 2:
+#                 out.append((t[0], t[1], _kb_now_section(), _kb_caption_altair(t[1])))
+#         ss["_cap_altair"] = out
+
+#     # images: (name, kind, payload) -> (name, kind, payload, section)
+#     if "_cap_images" in ss:
+#         out = []
+#         for t in list(ss["_cap_images"]):
+#             if len(t) >= 4:
+#                 out.append((t[0], t[1], t[2], t[3]))
+#             elif len(t) == 3:
+#                 out.append((t[0], t[1], t[2], _kb_now_section()))
+#         ss["_cap_images"] = out
+
+#     # texts: (name, text) -> (name, text, section)
+#     if "_cap_texts" in ss:
+#         out = []
+#         for t in list(ss["_cap_texts"]):
+#             if len(t) >= 3:
+#                 out.append((t[0], t[1], t[2]))
+#             elif len(t) == 2:
+#                 out.append((t[0], t[1], _kb_now_section()))
+#         ss["_cap_texts"] = out
+
+
+# # ---- main capture (DEDUPED + RESET) ----
+# def _kb_capture_now():
+#     if _st is None: return
+#     import json, time, io, hashlib, html
+#     from pathlib import Path
+
+#     # normalize old-format tuples to the new shape
+#     _kb__normalize_buckets(_st.session_state)
+#     def h_bytes(b: bytes) -> str: return hashlib.sha256(b).hexdigest()
+#     def h_text(s: str) -> str:    return hashlib.sha256(s.encode("utf-8", "ignore")).hexdigest()
+
+#     root = _kb_root()
+#     items = []
+#     ss = _st.session_state
+
+#     # -------- Tables (dedupe by CSV content) --------
+#     tbl_map = {}
+#     for name, df, section in list(ss.get("_cap_tables", [])):
+#         try:
+#             buf = io.StringIO(); df.to_csv(buf, index=False)
+#             d = h_text(buf.getvalue())
+#             if d not in tbl_map: tbl_map[d] = (name, df, section)
+#         except Exception: pass
+#     for i, (d, (name, df, section)) in enumerate(tbl_map.items(), 1):
+#         try:
+#             p = root / "tables" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.csv"
+#             df.to_csv(p, index=False)
+#             items.append({"type":"table_csv","path":str(p),"hash":d,"name":name,"section":section,
+#                           "columns":[str(c) for c in df.columns], "rows": int(getattr(df, "shape", [0,0])[0])})
+#         except Exception: pass
+
+#     # -------- Matplotlib (bytes captured before clear) --------
+#     mpl_map = {}
+#     for name, png, section, caption in list(ss.get("_cap_mpl_png", [])):
+#         try:
+#             d = h_bytes(png)
+#             if d not in mpl_map: mpl_map[d] = (name, png, section, caption)
+#         except Exception: pass
+#     for i, (d, (name, png, section, caption)) in enumerate(mpl_map.items(), 1):
+#         try:
+#             p = root / "plots" / "mpl" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.png"
+#             with open(p, "wb") as f: f.write(png)
+#             items.append({"type":"plot_png","lib":"matplotlib","path":str(p),"hash":d,"name":name,"section":section,"caption":caption})
+#         except Exception: pass
+
+#     # -------- Plotly (hash via PNG if kaleido, else JSON spec) --------
+#     has_kaleido = False
+#     try:
+#         import kaleido  # noqa: F401
+#         has_kaleido = True
+#     except Exception:
+#         pass
+#     pl_map = {}
+#     for name, fig, section, caption in list(ss.get("_cap_plotly", [])):
+#         try:
+#             if has_kaleido:
+#                 pngb = fig.to_image(format="png")
+#                 d = h_bytes(pngb)
+#                 if d not in pl_map: pl_map[d] = (name, ("png", pngb, fig), section, caption)
+#             else:
+#                 d = h_text(fig.to_json())
+#                 if d not in pl_map: pl_map[d] = (name, ("html", None, fig), section, caption)
+#         except Exception: pass
+#     for i, (d, (name, payload, section, caption)) in enumerate(pl_map.items(), 1):
+#         kind, pngb, fig = payload
+#         try:
+#             if kind == "png":
+#                 p = root / "plots" / "plotly" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.png"
+#                 with open(p, "wb") as f: f.write(pngb)
+#                 items.append({"type":"plot_png","lib":"plotly","path":str(p),"hash":d,"name":name,"section":section,"caption":caption})
+#             else:
+#                 p = root / "plots" / "plotly" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.html"
+#                 fig.write_html(str(p), include_plotlyjs="cdn", full_html=True)
+#                 items.append({"type":"plot_html","lib":"plotly","path":str(p),"hash":d,"name":name,"section":section,"caption":caption})
+#         except Exception: pass
+
+#     # -------- Altair (hash by JSON spec) --------
+#     alt_map = {}
+#     for name, ch, section, caption in list(ss.get("_cap_altair", [])):
+#         try:
+#             spec = ch.to_json(); d = h_text(spec)
+#             if d not in alt_map: alt_map[d] = (name, spec, ch, section, caption)
+#         except Exception: pass
+#     saver_ok = False
+#     try:
+#         import altair_saver  # noqa: F401
+#         saver_ok = True
+#     except Exception:
+#         pass
+#     for i, (d, (name, spec, ch, section, caption)) in enumerate(alt_map.items(), 1):
+#         try:
+#             if saver_ok:
+#                 from altair_saver import save
+#                 p = root / "plots" / "altair" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.html"
+#                 save(ch, str(p)); items.append({"type":"plot_html","lib":"altair","path":str(p),"hash":d,"name":name,"section":section,"caption":caption})
+#             else:
+#                 p = root / "plots" / "altair" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.json"
+#                 p.write_text(spec, encoding="utf-8"); items.append({"type":"plot_spec","lib":"altair","path":str(p),"hash":d,"name":name,"section":section,"caption":caption})
+#         except Exception: pass
+
+#     # -------- Images (hash PNG bytes or URL text) --------
+#     img_map = {}
+#     try:
+#         from PIL import Image
+#         import numpy as np, io as _io
+#         for name, kind, payload, section in list(ss.get("_cap_images", [])):
+#             try:
+#                 if kind == "pil":
+#                     b = _io.BytesIO(); payload.save(b, format="PNG"); data = b.getvalue()
+#                     d = h_bytes(data); 
+#                     if d not in img_map: img_map[d] = (name, "png", data, section)
+#                 elif kind == "ndarray":
+#                     im = Image.fromarray(payload); b = _io.BytesIO(); im.save(b, format="PNG")
+#                     data = b.getvalue(); d = h_bytes(data)
+#                     if d not in img_map: img_map[d] = (name, "png", data, section)
+#                 elif kind == "url":
+#                     d = h_text(str(payload))
+#                     if d not in img_map: img_map[d] = (name, "url", str(payload), section)
+#             except Exception: pass
+#     except Exception:
+#         pass
+#     for i, (d, (name, kind, data, section)) in enumerate(img_map.items(), 1):
+#         try:
+#             if kind == "png":
+#                 p = root / "images" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.png"
+#                 with open(p, "wb") as f: f.write(data)
+#                 items.append({"type":"image","path":str(p),"hash":d,"name":name,"section":section})
+#             else:
+#                 p = root / "images" / f"{_kb_safe(name)}_{i:02d}_{d[:8]}.url.txt"
+#                 p.write_text(data, encoding="utf-8")
+#                 items.append({"type":"image_url","path":str(p),"hash":d,"name":name,"section":section})
+#         except Exception: pass
+
+#     # -------- Text + metrics (hash by content) --------
+#     txt_map = {}
+#     for name, txt, section in list(ss.get("_cap_texts", [])):
+#         try:
+#             d = h_text(txt)
+#             if d not in txt_map: txt_map[d] = (name, txt, section)
+#         except Exception: pass
+#     for i, (d, (name, txt, section)) in enumerate(txt_map.items(), 1):
+#         try:
+#             p = root / "text" / f"{i:03d}_{_kb_safe(name)}_{d[:8]}.md"
+#             p.write_text(f"# {name}\n\n{txt}", encoding="utf-8")
+#             items.append({"type":"text_md","path":str(p),"hash":d,"name":name,"section":section})
+#         except Exception: pass
+#     if ss.get("_cap_metrics"):
+#         lines = ["# Metrics"]
+#         for lbl, val, dlt in ss["_cap_metrics"]:
+#             lines.append(f"- **{lbl}**: {val}" + (f"  (Δ {dlt})" if dlt else ""))
+#         p = root / "text" / "metrics.md"
+#         p.write_text("\n".join(lines), encoding="utf-8"); items.append({"type":"text_md","path":str(p),"name":"metrics","section":"Page"})
+
+#     # -------- README.md + index.html (friendly, thumbnails/previews) --------
+#     import html as _html
+#     sections = {}
+#     for it in items:
+#         sec = it.get("section") or "Page"
+#         sections.setdefault(sec, []).append(it)
+
+#     # README.md (simple)
+#     counts = {
+#         "tables": sum(1 for it in items if it["type"]=="table_csv"),
+#         "mpl":    sum(1 for it in items if it.get("lib")=="matplotlib"),
+#         "plotly": sum(1 for it in items if it.get("lib")=="plotly"),
+#         "altair": sum(1 for it in items if it.get("lib")=="altair" or it["type"]=="plot_spec"),
+#         "images": sum(1 for it in items if it["type"].startswith("image")),
+#         "text":   sum(1 for it in items if it["type"].startswith("text")),
+#     }
+#     readme = [f"# KB Snapshot ({time.strftime('%Y-%m-%d %H:%M:%S')})", "", "## Overview"]
+#     for k, v in counts.items():
+#         readme.append(f"- **{k.capitalize()}**: {v}")
+#     from pathlib import Path as _Path
+#     for sec, group in sections.items():
+#         readme.append(f"\n## {sec}")
+#         for t in [x for x in group if x["type"]=="table_csv"]:
+#             cols = ", ".join(t.get("columns", [])[:10])
+#             readme.append(f"- Table: `{_Path(t['path']).name}`  — rows: {t.get('rows','?')}, cols: {len(t.get('columns', []))}; columns: {cols}")
+#         for pth in [x for x in group if x["type"].startswith("plot") or x["type"].startswith("image")]:
+#             cap = pth.get("caption") or pth.get("name") or _Path(pth["path"]).name
+#             readme.append(f"- Figure: `{_Path(pth['path']).name}` — {cap}")
+#         for tx in [x for x in group if x["type"].startswith("text")]:
+#             readme.append(f"- Text: `{_Path(tx['path']).name}`")
+#     (root / "README.md").write_text("\n".join(readme), encoding="utf-8")
+
+#     # index.html
+#     css = """
+#     <style>
+#       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;}
+#       .sec{margin-top:28px;}
+#       .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
+#       .card{border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;}
+#       .card img{max-width:100%;height:auto;border-radius:8px;}
+#       .muted{color:#6b7280;font-size:12px;}
+#       table.preview{border-collapse:collapse;width:100%;font-size:12px}
+#       table.preview th,table.preview td{border:1px solid #e5e7eb;padding:4px 6px;}
+#       .type{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;}
+#       h1{margin-top:0} a{color:#2563eb;text-decoration:none;} a:hover{text-decoration:underline;}
+#     </style>"""
+#     html_parts = [f"<html><head><meta charset='utf-8'><title>KB Snapshot</title>{css}</head><body>"]
+#     html_parts.append(f"<h1>KB Snapshot</h1><div class='muted'>Created {time.strftime('%Y-%m-%d %H:%M:%S')}</div>")
+#     html_parts.append("<h3>Overview</h3><ul>" + "".join(
+#         f"<li><b>{_html.escape(k.capitalize())}</b>: {v}</li>" for k, v in counts.items()) + "</ul>")
+#     for sec, group in sections.items():
+#         html_parts.append(f"<div class='sec'><h2>{_html.escape(sec)}</h2>")
+#         figs = [x for x in group if x['type'].startswith('plot') or x['type'].startswith('image')]
+#         if figs:
+#             html_parts.append("<div class='grid'>")
+#             for f in figs:
+#                 cap = _html.escape((f.get("caption") or f.get("name") or _Path(f["path"]).name))
+#                 rel = _Path(f["path"]).as_posix()
+#                 html_parts.append(
+#                     f"<div class='card'><div class='type'>{_html.escape(f['type'])}</div>"
+#                     f"<a href='{rel}' target='_blank'><img src='{rel}' alt='{cap}'/></a>"
+#                     f"<div class='muted'>{cap}</div>"
+#                     f"<div class='muted'><code>{_html.escape(_Path(rel).name)}</code></div></div>"
+#                 )
+#             html_parts.append("</div>")
+#         tbls = [x for x in group if x['type']=='table_csv']
+#         if tbls:
+#             html_parts.append("<h3>Tables</h3>")
+#             for t in tbls:
+#                 rel = _Path(t["path"]).as_posix()
+#                 try:
+#                     with open(rel, "r", encoding="utf-8") as fh:
+#                         lines = [next(fh).rstrip("\n") for _ in range(8)]
+#                     cells = [ln.split(",") for ln in lines]
+#                     head = cells[0] if cells else []
+#                     rows = cells[1:] if len(cells) > 1 else []
+#                     table_html = "<table class='preview'><thead><tr>" + "".join(
+#                         f"<th>{_html.escape(h)}</th>" for h in head) + "</tr></thead><tbody>"
+#                     table_html += "".join("<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in r) + "</tr>" for r in rows)
+#                     table_html += "</tbody></table>"
+#                 except Exception:
+#                     table_html = "<div class='muted'>Preview unavailable</div>"
+#                 html_parts.append(
+#                     f"<div class='card'><div class='type'>table</div>"
+#                     f"<div><b>{_html.escape(_Path(rel).name)}</b> — rows: {t.get('rows','?')}, cols: {len(t.get('columns',[]))}</div>"
+#                     f"{table_html}<div><a href='{rel}' target='_blank'>Open CSV</a></div></div>"
+#                 )
+#         texts = [x for x in group if x['type'].startswith('text')]
+#         if texts:
+#             html_parts.append("<h3>Text</h3><div class='grid'>")
+#             for tx in texts:
+#                 rel = _Path(tx["path"]).as_posix()
+#                 html_parts.append(
+#                     f"<div class='card'><div class='type'>text</div>"
+#                     f"<div><a href='{rel}' target='_blank'>{_html.escape(_Path(rel).name)}</a></div></div>"
+#                 )
+#             html_parts.append("</div>")
+#         html_parts.append("</div>")
+#     html_parts.append("</body></html>")
+#     (root / "index.html").write_text("\n".join(html_parts), encoding="utf-8")
+
+#     # ---- add derivative factual summaries for LLMs ----
+#     items.extend(_kb__write_derivative_summaries(root, items))
+
+#     # ---- manifest + summary.txt ----
+#     manifest = {
+#         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+#         "counts": {
+#             "tables": len(tbl_map), "mpl": len(mpl_map), "plotly": len(pl_map),
+#             "altair": len(alt_map), "images": len(img_map), "text": len(txt_map),
+#         },
+#         "items": items,
+#     }
+#     (root / "index.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+#     (root / "summary.txt").write_text(
+#         "Snapshot saved (deduped).\n" + "\n".join(f"{k}: {v}" for k, v in manifest["counts"].items()),
+#         encoding="utf-8",
+#     )
+
+#     # ---- reset buckets so next click starts fresh ----
+#     for key in ("_cap_tables","_cap_mpl_png","_cap_plotly","_cap_altair","_cap_images","_cap_texts","_cap_metrics"):
+#         try:
+#             if key in ss: ss[key].clear()
+#         except Exception: pass
+
+#     # trigger re-index on next render (your app's auto-index watches base_folder)
+#     try:
+#         _st.session_state["_kb_last_sig"] = None
+#     except Exception:
+#         pass
+
+#     try: _st.toast(f"Snapshot saved → {root.as_posix()}", icon="💾")
+#     except Exception: pass
+
+# # ---- UI: always show buttons once patch finished ----
+# if _st is not None and _st.session_state.get("_cap_patched", False):
+#     _st.sidebar.markdown("### 📸 Snapshot")
+#     if _st.sidebar.button("Capture Snapshot (tables • plots • images • text)", use_container_width=True, key="kb_snap_sidebar"):
+#         _kb_capture_now()
+#         _st.rerun()
+#     if _st.button("📸 Capture Snapshot of This Page", key="kb_snap_inline"):
+#         _kb_capture_now()
+#         _st.rerun()
+# # =========================================================================================
