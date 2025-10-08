@@ -25,10 +25,10 @@ transformers==4.44.2
 sentence-transformers==2.7.0
 
 # ===== Vector / Retrieval =====
-chromadb==0.5.5
+# chromadb==0.5.5
 hnswlib==0.8.0
 # faiss-cpu  (commented until a Py3.13 wheel is confirmed on your target)
-# faiss-cpu==1.11.0
+faiss-cpu==1.11.0
 
 # ===== Parsers for RAG =====
 pypdf==4.2.0
