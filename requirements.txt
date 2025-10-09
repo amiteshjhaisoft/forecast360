@@ -1,36 +1,45 @@
-# ===== Core UI & Data =====
-streamlit==1.39.1
-rich==13.9.4                 # keep <14 for Streamlit 1.39.x
-pandas==2.3.3
-numpy==2.3.3                 # Py3.13-compatible
-pyarrow==18.1.0
-matplotlib==3.9.4
-plotly==5.24.1
-pillow==10.4.0
-python-dateutil==2.9.0.post0
-lxml==5.4.0                  # single version only
-openpyxl==3.1.5
-xlrd==2.0.2
-jsonschema==4.25.1
-python-dotenv==1.0.1
+# ---------- Core runtime ----------
+python-dotenv
+requests
+httpx
 
-# ===== ML / Stats =====
-scikit-learn==1.5.2
-statsmodels==0.14.5
+# ---------- Streamlit app ----------
+streamlit
+Pillow
 
-# ===== LLM / NLP (Py3.13 safe) =====
-# Use a torch that has wheels for Py3.13:
-torch==2.8.0                 # CPU build from PyPI works on Linux
-transformers==4.44.2
-sentence-transformers==2.7.0
+# ---------- Data / compute ----------
+numpy
+pandas
+pyarrow
 
-# ===== Vector / Retrieval =====
-# chromadb==0.5.5
-hnswlib==0.8.0
-# faiss-cpu  (commented until a Py3.13 wheel is confirmed on your target)
-faiss-cpu==1.11.0
+# ---------- Visualization ----------
+matplotlib
+plotly
 
-# ===== Parsers for RAG =====
-pypdf==4.2.0
-docx2txt==0.8
-beautifulsoup4==4.12.3
+# ---------- File parsing ----------
+pypdf
+openpyxl          # .xlsx
+xlrd==2.0.1       # .xls (legacy)
+PyYAML
+
+# ---------- Classic ML / Stats ----------
+scikit-learn
+statsmodels
+scipy             # boxcox() used when user selects "boxcox"
+
+# ---------- LangChain / Agents / Vector store ----------
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-anthropic
+langgraph
+faiss-cpu
+
+# ---------- Optional (only if you enable these models/features) ----------
+pmdarima        # Auto-ARIMA
+prophet         # Prophet (heavy; pulls cmdstanpy)
+tbats           # TBATS
+xgboost
+lightgbm
+darts           # For TFT model
+langsmith       # If you turn on tracing/telemetry
