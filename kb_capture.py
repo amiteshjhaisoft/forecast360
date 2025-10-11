@@ -1,3 +1,5 @@
+# Author: Amitesh Jha | iSOFT
+
 # kb_capture.py — capture-only KB writer (tables/figs/images/html/uploads) + TEXT SIDECARS + META INDEX
 from __future__ import annotations
 
