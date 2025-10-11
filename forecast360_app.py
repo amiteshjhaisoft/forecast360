@@ -2321,31 +2321,35 @@ def page_getting_started():
 
     st.divider()
    
-    if st.session_state.get("show_sidebar"):
+# --- app render ---
+if st.session_state.get("show_sidebar"):
+    # Sidebar
     try:
         sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
+    # Main page
     try:
         page_getting_started()
     except Exception as e:
         st.error(f"Error rendering Getting Started: {e}")
-    
-    # --- snapshot + upload button ---
+
+    st.divider()
+
     if st.button("📸 Save Snapshot & Upload to Azure", type="primary"):
         # 1) write snapshot locally
         out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
         # st.info(f"Local snapshot saved to: {out_dir}")
-    
+
         # 2) read secrets / env
         az = st.secrets.get("azure", {})
         account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
         connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
         container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
-        prefix            = az.get("prefix", "KB")  # optional virtual folder in the container
-    
+        prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
+
         try:
             # 3) sync folder to Azure Blob
             sync_folder_to_blob(
@@ -2358,31 +2362,85 @@ def page_getting_started():
                 delete_extraneous=False,  # True => strict mirror
                 verbose=False,
             )
-            # st.success(f"Uploaded KB to container '{container}' (prefix '{prefix}')")
             st.success(f"✅ Snapshot saved to the "Knowledge Base" into the Azure container '{container}' (prefix '{prefix}').")
-
-    
-            # 4) (optional) stop capturing any further UI after this point
-            #    Uncomment if you want to freeze capture after a snapshot
+            # (optional) stop capturing further UI
             # kb.unpatch()
-    
+
         except Exception as e:
             st.error(f"Azure upload failed: {e}")
-    
+
+        # 4) footer info
+        ts = datetime.now().strftime("%A, %d %B %Y %I:%M:%S %p")
+        st.success(f"✅ Snapshot saved to Knowledge Base Directory: **{out_dir}**")
+        st.info(f"🕒 Local Date & Time: **{ts}**")
+
         # 5) friendly footer info
-        try:
-            # Python 3.9+ (recommended)
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo("Australia/Sydney")
-        except Exception:
-            # Fallback if zoneinfo data isn't available on Windows/containers
-            # pip install tzdata
-            from dateutil import tz as _tz
-            tz = _tz.gettz("Australia/Sydney")
+                try:
+                    # Python 3.9+ (recommended)
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo("Australia/Sydney")
+                except Exception:
+                    # Fallback if zoneinfo data isn't available on Windows/containers
+                    # pip install tzdata
+                    from dateutil import tz as _tz
+                    tz = _tz.gettz("Australia/Sydney")
+                
+                local_time = datetime.now(tz)
+                formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+                st.info(f"🕒 Local Date & Time: **{formatted_time}**")
+
+
+# # --- snapshot + upload button ---
+#     if st.button("📸 Save Snapshot & Upload to Azure", type="primary"):
+#         # 1) write snapshot locally
+#         out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
+#         # st.info(f"Local snapshot saved to: {out_dir}")
+    
+#         # 2) read secrets / env
+#         az = st.secrets.get("azure", {})
+#         account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
+#         connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+#         container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
+#         container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
+#         prefix            = az.get("prefix", "KB")  # optional virtual folder in the container
+    
+#         try:
+#             # 3) sync folder to Azure Blob
+#             sync_folder_to_blob(
+#                 local_folder=out_dir,
+#                 container=container,
+#                 prefix=prefix,
+#                 account_url=account_url,
+#                 connection_string=connection_string,
+#                 container_sas_url=container_sas_url,
+#                 delete_extraneous=False,  # True => strict mirror
+#                 verbose=False,
+#             )
+#             # st.success(f"Uploaded KB to container '{container}' (prefix '{prefix}')")
+#             st.success(f"✅ Snapshot saved to the "Knowledge Base" into the Azure container '{container}' (prefix '{prefix}').")
+
+    
+#             # 4) (optional) stop capturing any further UI after this point
+#             #    Uncomment if you want to freeze capture after a snapshot
+#             # kb.unpatch()
+    
+#         except Exception as e:
+#             st.error(f"Azure upload failed: {e}")
+    
+#         # 5) friendly footer info
+#         try:
+#             # Python 3.9+ (recommended)
+#             from zoneinfo import ZoneInfo
+#             tz = ZoneInfo("Australia/Sydney")
+#         except Exception:
+#             # Fallback if zoneinfo data isn't available on Windows/containers
+#             # pip install tzdata
+#             from dateutil import tz as _tz
+#             tz = _tz.gettz("Australia/Sydney")
         
-        local_time = datetime.now(tz)
-        formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
-        st.info(f"🕒 Local Date & Time: **{formatted_time}**")
+#         local_time = datetime.now(tz)
+#         formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+#         st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 
     
     
