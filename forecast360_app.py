@@ -2362,19 +2362,15 @@ if st.session_state.get("show_sidebar"):
                 delete_extraneous=False,  # True => strict mirror
                 verbose=False,
             )
-            st.success(f"✅ Snapshot saved to the "Knowledge Base" into the Azure container '{container}' (prefix '{prefix}').")
+            st.success(f'✅ Snapshot saved to the "Knowledge Base" into the Azure container {container!r} (prefix {prefix!r}).')
             # (optional) stop capturing further UI
             # kb.unpatch()
 
         except Exception as e:
             st.error(f"Azure upload failed: {e}")
 
-        # 4) footer info
-        ts = datetime.now().strftime("%A, %d %B %Y %I:%M:%S %p")
-        st.success(f"✅ Snapshot saved to Knowledge Base Directory: **{out_dir}**")
-        st.info(f"🕒 Local Date & Time: **{ts}**")
-
-        # 5) friendly footer info
+        
+        # 4) friendly footer info
                 try:
                     # Python 3.9+ (recommended)
                     from zoneinfo import ZoneInfo
