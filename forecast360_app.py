@@ -2320,6 +2320,48 @@ def page_getting_started():
         st.info("Residual diagnostics not available (statsmodels missing or no fitted model).")
 
     st.divider()
+    
+    # 1) capture snapshot locally
+    out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
+    
+    # 2) read secrets / env
+    az = st.secrets.get("azure", {})
+    account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
+    connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
+    container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
+    prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
+    
+    # 3) upload to Azure Blob
+    try:
+        sync_folder_to_blob(
+            local_folder=out_dir,
+            container=container,
+            prefix=prefix,
+            account_url=account_url,
+            connection_string=connection_string,
+            container_sas_url=container_sas_url,
+            delete_extraneous=False,  # True => strict mirror
+            verbose=False,
+        )
+        st.success(f'✅ Snapshot saved to the Knowledge Base and uploaded to Azure container {container!r} (prefix {prefix!r}).')
+        # Optional: stop capturing further UI
+        # kb.unpatch()
+    except Exception as e:
+        st.error(f"Azure upload failed: {e}")
+    
+    # 4) friendly footer (Sydney local time)
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tz = ZoneInfo("Australia/Sydney")
+    except Exception:
+        from dateutil import tz as _tz  # fallback (pip install tzdata if needed)
+        tz = _tz.gettz("Australia/Sydney")
+    
+    local_time = datetime.now(tz)
+    formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+    st.info(f"🕒 Local Date & Time: **{formatted_time}**")
+     
    
 # --- app render ---
 if st.session_state.get("show_sidebar"):
@@ -2335,54 +2377,54 @@ if st.session_state.get("show_sidebar"):
     except Exception as e:
         st.error(f"Error rendering Getting Started: {e}")
 
-    st.divider()
+#     st.divider()
 
-    if st.button("📸 Save Snapshot & Upload to Azure", type="primary"):
-        # 1) write snapshot locally
-        out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
-        # st.info(f"Local snapshot saved to: {out_dir}")
+#     if st.button("📸 Save Snapshot & Upload to Azure", type="primary"):
+#         # 1) write snapshot locally
+#         out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
+#         # st.info(f"Local snapshot saved to: {out_dir}")
 
-        # 2) read secrets / env
-        az = st.secrets.get("azure", {})
-        account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
-        connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
-        container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
-        prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
+#         # 2) read secrets / env
+#         az = st.secrets.get("azure", {})
+#         account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
+#         connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+#         container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
+#         container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
+#         prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
 
-        try:
-            # 3) sync folder to Azure Blob
-            sync_folder_to_blob(
-                local_folder=out_dir,
-                container=container,
-                prefix=prefix,
-                account_url=account_url,
-                connection_string=connection_string,
-                container_sas_url=container_sas_url,
-                delete_extraneous=False,  # True => strict mirror
-                verbose=False,
-            )
-            st.success(f'✅ Snapshot saved to the "Knowledge Base" into the Azure container {container!r} (prefix {prefix!r}).')
-            # (optional) stop capturing further UI
-            # kb.unpatch()
+#         try:
+#             # 3) sync folder to Azure Blob
+#             sync_folder_to_blob(
+#                 local_folder=out_dir,
+#                 container=container,
+#                 prefix=prefix,
+#                 account_url=account_url,
+#                 connection_string=connection_string,
+#                 container_sas_url=container_sas_url,
+#                 delete_extraneous=False,  # True => strict mirror
+#                 verbose=False,
+#             )
+#             st.success(f'✅ Snapshot saved to the "Knowledge Base" into the Azure container {container!r} (prefix {prefix!r}).')
+#             # (optional) stop capturing further UI
+#             # kb.unpatch()
 
-        except Exception as e:
-            st.error(f"Azure upload failed: {e}")
+#         except Exception as e:
+#             st.error(f"Azure upload failed: {e}")
 
-# 4) friendly footer info
-        try:
-            # Python 3.9+ (recommended)
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo("Australia/Sydney")
-        except Exception:
-            # Fallback if zoneinfo data isn't available on Windows/containers
-            # pip install tzdata
-            from dateutil import tz as _tz
-            tz = _tz.gettz("Australia/Sydney")
+# # 4) friendly footer info
+#         try:
+#             # Python 3.9+ (recommended)
+#             from zoneinfo import ZoneInfo
+#             tz = ZoneInfo("Australia/Sydney")
+#         except Exception:
+#             # Fallback if zoneinfo data isn't available on Windows/containers
+#             # pip install tzdata
+#             from dateutil import tz as _tz
+#             tz = _tz.gettz("Australia/Sydney")
                     
-            local_time = datetime.now(tz)
-            formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
-            st.info(f"🕒 Local Date & Time: **{formatted_time}**")        
+#             local_time = datetime.now(tz)
+#             formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+#             st.info(f"🕒 Local Date & Time: **{formatted_time}**")        
 
 
 
