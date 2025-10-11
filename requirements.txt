@@ -43,3 +43,8 @@ xgboost
 lightgbm
 darts           # For TFT model
 langsmith       # If you turn on tracing/telemetry
+
+# ---------------Azure Blob Storage ---------------
+azure-storage-blob>=12.22.0
+azure-identity>=1.17.1
+
