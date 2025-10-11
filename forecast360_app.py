@@ -2321,27 +2321,22 @@ def page_getting_started():
 
     st.divider()
    
-    # --- imports at top ---
-    # import os
-    # from datetime import datetime
-    # import streamlit as st
-    # from kb_capture import KBCapture
-    # from kb_sync_azure import sync_folder_to_blob
+    if st.session_state.get("show_sidebar"):
+    try:
+        sidebar_getting_started()
+    except Exception as e:
+        st.sidebar.error(f"Sidebar failed: {e}")
 
-    # --- init KB capture once (do this early in your script) ---
-    if "kb" not in st.session_state:
-        st.session_state.kb = KBCapture(folder_name="KB").patch()
-    
-    kb = st.session_state.kb
-    
-    # ... your app UI / rendering happens here ...
-    # All displayed markdown/tables/figs will be captured by the patched renderers.
+    try:
+        page_getting_started()
+    except Exception as e:
+        st.error(f"Error rendering Getting Started: {e}")
     
     # --- snapshot + upload button ---
     if st.button("📸 Save Snapshot & Upload to Azure", type="primary"):
         # 1) write snapshot locally
         out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
-        st.info(f"Local snapshot saved to: {out_dir}")
+        # st.info(f"Local snapshot saved to: {out_dir}")
     
         # 2) read secrets / env
         az = st.secrets.get("azure", {})
@@ -2363,7 +2358,9 @@ def page_getting_started():
                 delete_extraneous=False,  # True => strict mirror
                 verbose=False,
             )
-            st.success(f"Uploaded KB to container '{container}' (prefix '{prefix}')")
+            # st.success(f"Uploaded KB to container '{container}' (prefix '{prefix}')")
+            st.success(f"✅ Snapshot saved to the "Knowledge Base" into the Azure container '{container}' (prefix '{prefix}').")
+
     
             # 4) (optional) stop capturing any further UI after this point
             #    Uncomment if you want to freeze capture after a snapshot
@@ -2373,20 +2370,20 @@ def page_getting_started():
             st.error(f"Azure upload failed: {e}")
     
         # 5) friendly footer info
-        local_time = datetime.now()
-        formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p")
-        st.success(f"✅ Snapshot saved to Knowledge Base Directory: **{out_dir}**")
+        try:
+            # Python 3.9+ (recommended)
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("Australia/Sydney")
+        except Exception:
+            # Fallback if zoneinfo data isn't available on Windows/containers
+            # pip install tzdata
+            from dateutil import tz as _tz
+            tz = _tz.gettz("Australia/Sydney")
+        
+        local_time = datetime.now(tz)
+        formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
         st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 
     
     
-if st.session_state.get("show_sidebar"):
-    try:
-        sidebar_getting_started()
-    except Exception as e:
-        st.sidebar.error(f"Sidebar failed: {e}")
 
-    try:
-        page_getting_started()
-    except Exception as e:
-        st.error(f"Error rendering Getting Started: {e}")
