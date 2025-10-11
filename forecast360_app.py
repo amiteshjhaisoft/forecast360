@@ -543,9 +543,9 @@ def sidebar_getting_started():
             st.subheader("ARIMA Family")
             sel_ARMA      = st.checkbox("ARMA",       value=st.session_state.get("sel_ARMA", True),    key="sel_ARMA")
             sel_ARIMA     = st.checkbox("ARIMA",      value=st.session_state.get("sel_ARIMA", True),   key="sel_ARIMA")
-            sel_ARIMAX    = st.checkbox("ARIMAX",     value=st.session_state.get("sel_ARIMAX", False), key="sel_ARIMAX")
-            sel_SARIMA    = st.checkbox("SARIMA",     value=st.session_state.get("sel_SARIMA", False), key="sel_SARIMA")
-            sel_SARIMAX   = st.checkbox("SARIMAX",    value=st.session_state.get("sel_SARIMAX", False),key="sel_SARIMAX")
+            sel_ARIMAX    = st.checkbox("ARIMAX",     value=st.session_state.get("sel_ARIMAX", True), key="sel_ARIMAX")
+            sel_SARIMA    = st.checkbox("SARIMA",     value=st.session_state.get("sel_SARIMA", True), key="sel_SARIMA")
+            sel_SARIMAX   = st.checkbox("SARIMAX",    value=st.session_state.get("sel_SARIMAX", True),key="sel_SARIMAX")
             sel_AutoARIMA = st.checkbox("Auto_ARIMA", value=st.session_state.get("sel_AutoARIMA", False), key="sel_AutoARIMA")
 
         with col_right:
