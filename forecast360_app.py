@@ -328,7 +328,7 @@ def sidebar_getting_started():
     with st.sidebar:
         # ---- Branding --------------------------------------------------------
         if Path("assets/logo.png").exists():
-            st.image("assets/logo.png", caption="iSOFT ANZ Pvt Ltd", use_column_width=True)
+            st.image("assets/logo.png", caption="iSOFT ANZ Pvt Ltd", use_container_width=True)
 
         st.subheader("🚀 Getting Started")
 
