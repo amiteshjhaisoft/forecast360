@@ -2322,11 +2322,11 @@ def page_getting_started():
     st.divider()
    
     # --- imports at top ---
-    import os
-    from datetime import datetime
-    import streamlit as st
-    from kb_capture import KBCapture
-    from kb_sync_azure import sync_folder_to_blob
+    # import os
+    # from datetime import datetime
+    # import streamlit as st
+    # from kb_capture import KBCapture
+    # from kb_sync_azure import sync_folder_to_blob
 
     # --- init KB capture once (do this early in your script) ---
     if "kb" not in st.session_state:
