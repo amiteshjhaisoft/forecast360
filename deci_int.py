@@ -696,10 +696,18 @@ def render_chat_popover():
         st.caption("Uses the latest Knowledge Base snapshot")
 
         # Provider toggle — default Claude Sonnet 4-5
-        options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
-        default_idx = 0  # Claude by default
-        st.session_state["backend"] = st.segmented_control("Model", options=options, index=default_idx)
+        # options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
+        # default_idx = 0  # Claude by default
+        # st.session_state["backend"] = st.segmented_control("Model", options=options, index=default_idx)
 
+        options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
+        # Use the option value for default (Claude by default)
+        current = st.session_state.get("backend", "Claude (Anthropic)")
+        if current not in options:
+            current = "Claude (Anthropic)"
+        st.session_state["backend"] = st.segmented_control("Model", options=options, default=current)
+
+        
         if st.session_state["backend"].startswith("Claude"):
             st.session_state["claude_model"] = st.text_input("Claude model", value=st.session_state.get("claude_model", DEFAULT_CLAUDE))
         else:
