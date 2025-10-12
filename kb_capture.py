@@ -1,12 +1,15 @@
 # Author: Amitesh Jha | iSOFT
 # kb_capture.py — capture-only KB writer (tables/figs/images/html/uploads) + TEXT SIDECARS + META INDEX + VERSION
+# NOTE: This version writes files WITHOUT datetime stamps. It overwrites stable names
+# like tables/<block>.csv, figs/<block>.png, images/<block>.png, html/<block>.html.
 
 from __future__ import annotations
 
 import io, re, json, hashlib, datetime as _dt
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from collections import defaultdict
 
 # ---- optional deps (module still importable without them) ----
 try:
@@ -33,9 +36,8 @@ def _slugify(s: str, max_len: int = 64) -> str:
     return s[:max_len] or "untitled"
 
 
-def _now() -> str:
-    # Use underscore in timestamp to avoid hyphens in filenames
-    return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+def _now_iso() -> str:
+    return _dt.datetime.now().isoformat(timespec="seconds")
 
 
 def _ensure_dir(p: Path) -> Path:
@@ -89,6 +91,23 @@ def _fig_to_png_bytes(fig) -> bytes:
     return buf.getvalue()
 
 
+def _to_png_bytes_from_image_like(x: Any) -> Optional[bytes]:
+    try:
+        from PIL import Image
+        if _is_pil(x):
+            b = io.BytesIO()
+            x.save(b, format="PNG")
+            return b.getvalue()
+        if _is_np(x):
+            im = Image.fromarray(x)
+            b = io.BytesIO()
+            im.save(b, format="PNG")
+            return b.getvalue()
+    except Exception:
+        return None
+    return None
+
+
 def _txt(path: Path) -> Path:
     return path.with_suffix(".txt")
 
@@ -114,10 +133,10 @@ def kb_compute_version(kb_dir: Path) -> str:
 class _Item:
     # kinds: table | fig_png | image | html | upload | markdown  (note: fig_png = PNG bytes)
     kind: str
-    title: str  # block name (used in filename)
+    title: str  # block name (used in filename base)
     payload: Any
     meta: Dict[str, Any] = field(default_factory=dict)
-    ts: str = field(default_factory=_now)
+    created_at: str = field(default_factory=_now_iso)
 
 
 _GLOBAL_BLOCK = "home"
@@ -141,8 +160,13 @@ class KBCapture:
     - Writes **sidecar text** for figs/images/html so embedders have semantics.
     - Writes a **text/blocks.md** concatenation of captured markdown.
     - Emits **meta/index.json** with one entry per artifact.
-    - NEW: emits **meta/version.json** with {"version": "<12hex>", "created_at": "..."}.
-           Also exposes `self.last_version`.
+    - Emits **meta/version.json** with {"version": "<12hex>", "created_at": "..."}.
+
+    IMPORTANT: Filenames have **NO DATETIME STAMPS**. A stable base name is used:
+      tables/<block>.csv, figs/<block>.png, images/<block>.png, html/<block>.html
+    When multiple artifacts of the same kind appear for one block **in a single flush**,
+    numeric suffixes are added: <block>_2.csv, <block>_3.csv, ...
+    Subsequent flushes will overwrite the same base names (or the highest suffix seen in that flush).
     """
 
     def __init__(self, folder_name: str):
@@ -201,12 +225,10 @@ class KBCapture:
         # Extract title from markdown or HTML (supports your block-card+h4)
         def _extract_title_from_markdown(md: str) -> Optional[str]:
             s = str(md)
-
             # 1) Any HTML <h1>..</h6>
             m = re.findall(r"<h[1-6][^>]*>(.*?)</h[1-6]>", s, flags=re.I | re.DOTALL)
             if m:
                 return _slugify(_clean_html_text(m[-1]))
-
             # 2) Specific: <div class="block-card">...<h#>Title</h#>...</div>
             m2 = re.findall(
                 r'<div[^>]*class="[^"]*block-card[^"]*"[^>]*>.*?<h[1-6][^>]*>(.*?)</h[1-6]>',
@@ -215,13 +237,11 @@ class KBCapture:
             )
             if m2:
                 return _slugify(_clean_html_text(m2[-1]))
-
             # 3) Fallback: last ATX (#) heading in text
             for line in s.splitlines()[::-1]:
                 t = line.strip()
                 if t.startswith("#"):
                     return _slugify(t.lstrip("#").strip())
-
             return None
 
         def _w_markdown(body, *a, **k):
@@ -246,33 +266,29 @@ class KBCapture:
                 try:
                     from matplotlib.figure import Figure
                     from matplotlib.axes import Axes
-                    if isinstance(obj, Axes):
-                        obj = obj.figure
                     if isinstance(obj, Figure):
-                        png = _fig_to_png_bytes(obj)
-                        self._items.append(_Item("fig_png", _GLOBAL_BLOCK, png))
+                        self._items.append(_Item("fig_png", _GLOBAL_BLOCK, _fig_to_png_bytes(obj)))
+                        return True
+                    if isinstance(obj, Axes):
+                        self._items.append(_Item("fig_png", _GLOBAL_BLOCK, _fig_to_png_bytes(obj.figure)))
                         return True
                 except Exception:
                     pass
-            # images
-            if _is_pil(obj) or _is_np(obj) or isinstance(obj, (bytes, bytearray)):
-                self._items.append(_Item("image", _GLOBAL_BLOCK, obj))
+            # PIL / numpy arrays -> image PNG
+            b = _to_png_bytes_from_image_like(obj)
+            if b is not None:
+                self._items.append(_Item("image", _GLOBAL_BLOCK, b))
                 return True
-            # plotly / altair / HTML-ish
-            try:
-                if hasattr(obj, "to_html") or hasattr(obj, "write_html"):
-                    self._items.append(_Item("html", _GLOBAL_BLOCK, obj, meta={"format": "plotly_or_html"}))
-                    return True
-            except Exception:
-                pass
             return False
 
-        def _w_write(*args, **kwargs):
-            for a in args:
-                _capture_from_obj(a)
-            return self._orig["write"](*args, **kwargs)
+        def _w_write(obj: Any, *a, **k):
+            try:
+                if _capture_from_obj(obj):
+                    return self._orig["write"](obj, *a, **k)
+            except Exception:
+                pass
+            return self._orig["write"](obj, *a, **k)
 
-        # explicit Streamlit APIs
         def _w_dataframe(df, *a, **k):
             self._items.append(_Item("table", _GLOBAL_BLOCK, df))
             return self._orig["dataframe"](df, *a, **k)
@@ -282,77 +298,68 @@ class KBCapture:
             return self._orig["table"](df, *a, **k)
 
         def _w_pyplot(fig=None, *a, **k):
-            # accept Figure or Axes or None; snapshot bytes NOW
-            if fig is None and _plt is not None:
-                fig = _plt.gcf()
-            else:
-                try:
-                    from matplotlib.axes import Axes
-                    if isinstance(fig, Axes):
-                        fig = fig.figure
-                except Exception:
-                    pass
-            if fig is not None:
-                try:
-                    png = _fig_to_png_bytes(fig)
-                    self._items.append(_Item("fig_png", _GLOBAL_BLOCK, png))
-                except Exception:
-                    pass
+            try:
+                if fig is None and _plt is not None:
+                    fig = _plt.gcf()
+                if fig is not None:
+                    self._items.append(_Item("fig_png", _GLOBAL_BLOCK, _fig_to_png_bytes(fig)))
+            except Exception:
+                pass
             return self._orig["pyplot"](fig, *a, **k)
 
         def _w_image(img, *a, **k):
-            payload = img
-            if isinstance(payload, (list, tuple)):
-                for i, x in enumerate(payload):
-                    self._items.append(_Item("image", f"{_GLOBAL_BLOCK}-{i}", x))
-            else:
-                self._items.append(_Item("image", _GLOBAL_BLOCK, payload))
+            try:
+                b = _to_png_bytes_from_image_like(img)
+                if b is None and hasattr(img, "read"):
+                    b = img.read()
+                if b is not None:
+                    self._items.append(_Item("image", _GLOBAL_BLOCK, b))
+            except Exception:
+                pass
             return self._orig["image"](img, *a, **k)
 
         def _w_plotly(fig, *a, **k):
-            self._items.append(_Item("html", _GLOBAL_BLOCK, fig, meta={"format": "plotly"}))
+            try:
+                # Save Plotly as standalone HTML (no timestamp)
+                html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+                self._items.append(_Item("html", _GLOBAL_BLOCK, html, meta={"format": "plotly"}))
+            except Exception:
+                pass
             return self._orig["plotly_chart"](fig, *a, **k)
 
         def _w_altair(chart, *a, **k):
-            self._items.append(_Item("html", _GLOBAL_BLOCK, chart, meta={"format": "altair"}))
+            try:
+                html = chart.to_html()
+                self._items.append(_Item("html", _GLOBAL_BLOCK, html, meta={"format": "altair"}))
+            except Exception:
+                pass
             return self._orig["altair_chart"](chart, *a, **k)
 
-        def _w_uploader(label, *a, **k):
-            res = self._orig["file_uploader"](label, *a, **k)
-            if res is None:
-                return res
-            if isinstance(res, list):
-                for up in res:
-                    self._capture_upload(up)
-            else:
-                self._capture_upload(res)
-            return res
+        def _w_uploader(*a, **k):
+            uploaded = self._orig["file_uploader"](*a, **k)
+            try:
+                if uploaded is not None:
+                    if not isinstance(uploaded, list):
+                        uploaded = [uploaded]
+                    for u in uploaded:
+                        self._capture_upload(u)
+            except Exception:
+                pass
+            return uploaded
 
-        # attach wrappers
-        if self._orig.get("title"):
-            st.title = _w_title  # type: ignore
-        if self._orig.get("header"):
-            st.header = _w_header  # type: ignore
-        if self._orig.get("subheader"):
-            st.subheader = _w_subheader  # type: ignore
-        if self._orig.get("markdown"):
-            st.markdown = _w_markdown  # type: ignore
-        if self._orig.get("write"):
-            st.write = _w_write  # type: ignore
-        if self._orig.get("dataframe"):
-            st.dataframe = _w_dataframe  # type: ignore
-        if self._orig.get("table"):
-            st.table = _w_table  # type: ignore
-        if self._orig.get("pyplot"):
-            st.pyplot = _w_pyplot  # type: ignore
-        if self._orig.get("image"):
-            st.image = _w_image  # type: ignore
-        if self._orig.get("plotly_chart"):
-            st.plotly_chart = _w_plotly  # type: ignore
-        if self._orig.get("altair_chart"):
-            st.altair_chart = _w_altair  # type: ignore
-        if self._orig.get("file_uploader"):
-            st.file_uploader = _w_uploader  # type: ignore
+        # patch
+        if self._orig.get("markdown"): st.markdown = _w_markdown  # type: ignore
+        if self._orig.get("write"): st.write = _w_write  # type: ignore
+        if self._orig.get("title"): st.title = _w_title  # type: ignore
+        if self._orig.get("header"): st.header = _w_header  # type: ignore
+        if self._orig.get("subheader"): st.subheader = _w_subheader  # type: ignore
+        if self._orig.get("dataframe"): st.dataframe = _w_dataframe  # type: ignore
+        if self._orig.get("table"): st.table = _w_table  # type: ignore
+        if self._orig.get("pyplot"): st.pyplot = _w_pyplot  # type: ignore
+        if self._orig.get("image"): st.image = _w_image  # type: ignore
+        if self._orig.get("plotly_chart"): st.plotly_chart = _w_plotly  # type: ignore
+        if self._orig.get("altair_chart"): st.altair_chart = _w_altair  # type: ignore
+        if self._orig.get("file_uploader"): st.file_uploader = _w_uploader  # type: ignore
 
         self._patched = True
         return self
@@ -379,6 +386,19 @@ class KBCapture:
     def _outdir(self) -> Path:
         return Path(self.folder_name)  # fixed folder (no timestamped parent)
 
+    def _next_name(self, counters: Dict[Tuple[str, str], int], kind: str, block_slug: str, ext: str) -> str:
+        """Stable base name with incremental suffix within a single flush.
+        First occurrence => <block>.<ext>
+        2nd => <block>_2.<ext>, then _3, ...
+        """
+        key = (kind, block_slug)
+        counters[key] += 1
+        idx = counters[key]
+        base = f"{block_slug}"
+        if idx == 1:
+            return f"{base}.{ext}"
+        return f"{base}_{idx}.{ext}"
+
     def flush(self) -> str:
         outdir = _ensure_dir(self._outdir())
 
@@ -395,18 +415,21 @@ class KBCapture:
         blocks_markdown: List[str] = []  # for text/blocks.md
         index_items: List[Dict[str, Any]] = []
 
+        # counters for duplicate names within a single flush
+        counters: Dict[Tuple[str, str], int] = defaultdict(int)
+
         for it in self._items:
             block_slug = _slugify(it.title or "home")
-            ts = it.ts
 
             if it.kind == "markdown":
                 # Keep the raw markdown text in order (for blocks.md)
                 body = str(it.payload)
                 blocks_markdown.append(body if body.endswith("\n") else body + "\n")
+                continue
 
-            elif it.kind == "table":
+            if it.kind == "table":
                 try:
-                    name = f"{ts}_{block_slug}.csv"
+                    name = self._next_name(counters, "table", block_slug, "csv")
                     csv_path = tables_dir / name
                     csv_path.write_text(it.payload.to_csv(index=False), encoding="utf-8")
 
@@ -416,7 +439,7 @@ class KBCapture:
                         nrows = int(getattr(it.payload, "shape", [0])[0] or 0)
                     except Exception:
                         cols, nrows = [], 0
-                    sc_path = _txt(csv_path.with_suffix(""))  # tables/<ts>_<block>.txt
+                    sc_path = _txt(csv_path.with_suffix(""))  # tables/<block>[_2].txt
                     sc_text = (
                         f"# {it.title}\n\n"
                         f"Table captured from block **{it.title}**.\n\n"
@@ -432,57 +455,46 @@ class KBCapture:
                         "sidecar": str(sc_path.relative_to(outdir)),
                         "nrows": nrows,
                         "columns": cols,
-                        "created_at": ts,
+                        "created_at": it.created_at,
                     })
                 except Exception:
                     pass
+                continue
 
-            elif it.kind == "fig_png":
+            if it.kind == "fig_png":
                 try:
-                    png_path = figs_dir / f"{ts}_{block_slug}.png"
+                    png_path = figs_dir / self._next_name(counters, "fig", block_slug, "png")
                     png_path.write_bytes(it.payload)
 
                     sc_path = _txt(png_path.with_suffix(""))
                     sc_text = (
                         f"# {it.title}\n\n"
-                        f"Figure image exported from Forecast360 block **{it.title}**.\n"
+                        f"Figure captured from block **{it.title}**.\n"
                     )
                     sc_path.write_text(sc_text, encoding="utf-8")
 
                     index_items.append({
-                        "kind": "fig",
+                        "kind": "figure",
                         "block": it.title,
                         "title": it.title,
                         "path": str(png_path.relative_to(outdir)),
                         "sidecar": str(sc_path.relative_to(outdir)),
-                        "created_at": ts,
+                        "created_at": it.created_at,
                     })
                 except Exception:
                     pass
+                continue
 
-            elif it.kind == "image":
+            if it.kind == "image":
                 try:
-                    name = f"{ts}_{block_slug}.png"
-                    img_path = images_dir / name
-                    payload = it.payload
-                    if _is_pil(payload):
-                        buf = io.BytesIO()
-                        payload.save(buf, format="PNG")
-                        img_path.write_bytes(buf.getvalue())
-                    elif _is_np(payload):
-                        from PIL import Image
-                        arr = payload
-                        if getattr(arr, "dtype", None) != "uint8":
-                            import numpy as np
-                            arr = arr - arr.min()
-                            rng = arr.max() - arr.min() or 1.0
-                            arr = (255.0 * (arr / rng)).astype("uint8")
-                        Image.fromarray(arr).save(img_path)
-                    elif isinstance(payload, (bytes, bytearray)):
-                        img_path.write_bytes(bytes(payload))
+                    img_path = images_dir / self._next_name(counters, "image", block_slug, "png")
+                    img_path.write_bytes(it.payload)
 
                     sc_path = _txt(img_path.with_suffix(""))
-                    sc_text = f"# {it.title}\n\nImage associated with block **{it.title}**.\n"
+                    sc_text = (
+                        f"# {it.title}\n\n"
+                        f"Image captured from block **{it.title}**.\n"
+                    )
                     sc_path.write_text(sc_text, encoding="utf-8")
 
                     index_items.append({
@@ -491,49 +503,23 @@ class KBCapture:
                         "title": it.title,
                         "path": str(img_path.relative_to(outdir)),
                         "sidecar": str(sc_path.relative_to(outdir)),
-                        "created_at": ts,
+                        "created_at": it.created_at,
                     })
                 except Exception:
                     pass
+                continue
 
-            elif it.kind == "html":
+            if it.kind == "html":
                 try:
-                    name = f"{ts}_{block_slug}.html"
-                    html_path = html_dir / name
-                    src = it.payload
-                    fmt = (it.meta or {}).get("format")
+                    html_path = html_dir / self._next_name(counters, "html", block_slug, "html")
+                    html_path.write_text(str(it.payload), encoding="utf-8")
 
-                    html_written = False
-                    if fmt == "plotly":
-                        if hasattr(src, "write_html"):
-                            src.write_html(str(html_path), include_plotlyjs="cdn", full_html=False)
-                            html_written = True
-                        elif hasattr(src, "to_html"):
-                            html_path.write_text(src.to_html(include_plotlyjs="cdn", full_html=False), encoding="utf-8")
-                            html_written = True
-                    elif fmt == "altair":
-                        if hasattr(src, "to_html"):
-                            html_path.write_text(src.to_html(), encoding="utf-8")
-                            html_written = True
-
-                    if not html_written:
-                        # best-effort generic serialization
-                        html_path.write_text(str(src), encoding="utf-8")
-
-                    # Sidecar: text-only extraction to feed embedders
                     sc_path = _txt(html_path.with_suffix(""))
-                    raw = ""
-                    try:
-                        if hasattr(src, "to_html"):
-                            raw = src.to_html()
-                        elif hasattr(src, "to_json"):
-                            raw = src.to_json()
-                        else:
-                            raw = str(src)
-                    except Exception:
-                        raw = str(src)
-                    plain = _clean_html_text(raw) or f"Interactive chart for block {it.title}."
-                    sc_path.write_text(plain, encoding="utf-8")
+                    sc_text = (
+                        f"# {it.title}\n\n"
+                        f"HTML artifact captured from block **{it.title}**.\n"
+                    )
+                    sc_path.write_text(sc_text, encoding="utf-8")
 
                     index_items.append({
                         "kind": "html",
@@ -541,29 +527,36 @@ class KBCapture:
                         "title": it.title,
                         "path": str(html_path.relative_to(outdir)),
                         "sidecar": str(sc_path.relative_to(outdir)),
-                        "created_at": ts,
+                        "created_at": it.created_at,
+                        "format": it.meta.get("format"),
                     })
                 except Exception:
                     pass
+                continue
 
-            elif it.kind == "upload":
+            if it.kind == "upload":
                 try:
-                    orig = it.meta.get("original") or f"{ts}_{block_slug}.bin"
-                    # Replace hyphens with underscores in upload filenames
-                    orig = orig.replace("-", "_")
-                    target = upl_dir / orig
-                    if target.exists():
-                        stem = Path(orig).stem
-                        suf = Path(orig).suffix
-                        h = hashlib.sha256(it.payload).hexdigest()[:8]
-                        target = upl_dir / f"{stem}__dup_{h}{suf}"
-                    target.write_bytes(it.payload)
+                    original = _slugify(it.meta.get("original", "upload"), 80)
+                    base = original.rsplit(".", 1)
+                    if len(base) == 2:
+                        bare, ext = base[0], base[1]
+                    else:
+                        bare, ext = original, "bin"
+                    # Use original name, but avoid clobber within same flush
+                    key = ("upload", bare)
+                    counters[key] += 1
+                    idx = counters[key]
+                    if idx == 1:
+                        name = f"{bare}.{ext}"
+                    else:
+                        name = f"{bare}_{idx}.{ext}"
+                    upath = upl_dir / name
+                    upath.write_bytes(it.payload)
 
-                    # Also create a tiny sidecar with filename and basic file facts
-                    sc_path = _txt(target.with_suffix(""))
+                    sc_path = _txt(upath.with_suffix(""))
                     sc_text = (
-                        f"# Upload: {orig}\n\n"
-                        f"Uploaded in block **{it.title}**. Size: {len(it.payload)} bytes.\n"
+                        f"# {it.title}\n\n"
+                        f"Uploaded file from block **{it.title}**. Original: {it.meta.get('original')}\n"
                     )
                     sc_path.write_text(sc_text, encoding="utf-8")
 
@@ -571,36 +564,30 @@ class KBCapture:
                         "kind": "upload",
                         "block": it.title,
                         "title": it.title,
-                        "path": str(target.relative_to(outdir)),
+                        "path": str(upath.relative_to(outdir)),
                         "sidecar": str(sc_path.relative_to(outdir)),
-                        "size": len(it.payload),
-                        "created_at": ts,
+                        "created_at": it.created_at,
+                        "original": it.meta.get("original"),
                     })
                 except Exception:
                     pass
+                continue
 
-        # ---- write composite text artifacts ----
-        # 1) Blocks markdown (ordered capture of markdown bodies)
-        if blocks_markdown:
-            (text_dir / "blocks.md").write_text("".join(blocks_markdown), encoding="utf-8")
+        # Write text/blocks.md
+        (text_dir / "blocks.md").write_text("".join(blocks_markdown), encoding="utf-8")
 
-        # 2) Meta index (one JSON list)
-        (meta_dir / "index.json").write_text(
-            json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8"
+        # Write meta/index.json
+        (meta_dir / "index.json").write_text(json.dumps(index_items, indent=2), encoding="utf-8")
+
+        # Compute and write version
+        version = kb_compute_version(outdir)
+        self.last_version = version
+        (meta_dir / "version.json").write_text(
+            json.dumps({"version": version, "created_at": _now_iso()}, indent=2),
+            encoding="utf-8",
         )
 
-        # 3) NEW — Version manifest (after blocks.md + index.json exist)
-        try:
-            version = kb_compute_version(outdir)
-            (meta_dir / "version.json").write_text(
-                json.dumps({"version": version, "created_at": _now()}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            self.last_version = version
-        except Exception:
-            # don't break flush on version write failure
-            self.last_version = None
-
-        # clear buffer after flush
+        # Clear items for next cycle (optional — comment if you prefer accumulation)
         self._items.clear()
-        return str(outdir)
+
+        return str(outdir.resolve())
