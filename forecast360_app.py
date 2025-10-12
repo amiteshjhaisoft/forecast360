@@ -336,6 +336,20 @@ def sidebar_getting_started():
 
         st.subheader("🚀 Getting Started")
 
+        # # ---- Data Upload -----------------------------------------------------
+        # st.header("📂 Data Upload")
+        # up = st.file_uploader(
+        #     "Upload CSV / Excel / JSON / Parquet / XML",
+        #     type=ACCEPTED_EXTS,
+        #     accept_multiple_files=False,
+        #     key="gs_file",
+        # )
+        # xml_xpath = st.text_input(
+        #     "XML row path (optional XPath)",
+        #     value=st.session_state.get("xml_xpath", ""),
+        #     help="e.g., .//row  or  .//record  or  .//item",
+        #     key="xml_xpath",
+        # )
         # ---- Data Upload -----------------------------------------------------
         st.header("📂 Data Upload")
         up = st.file_uploader(
@@ -344,6 +358,12 @@ def sidebar_getting_started():
             accept_multiple_files=False,
             key="gs_file",
         )
+        
+        # Normalize: some wrappers (or Streamlit internals) can return a list even when
+        # accept_multiple_files=False. Ensure we work with a single UploadedFile or None.
+        if isinstance(up, list):
+            up = up[0] if up else None
+        
         xml_xpath = st.text_input(
             "XML row path (optional XPath)",
             value=st.session_state.get("xml_xpath", ""),
@@ -359,37 +379,103 @@ def sidebar_getting_started():
         st.divider()
         st.markdown("**🔎 Column detection — Automatic**")
 
+        # # ---- Read uploaded file ---------------------------------------------
+        # _data, source_name = None, None
+        # if up is not None:
+        #     try:
+        #         if "cached_read" in globals() and callable(globals().get("cached_read")):
+        #             _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
+        #         else:
+        #             ext = Path(up.name).suffix.lower()
+        #             raw = up.getvalue()
+        #             if ext == ".csv":
+        #                 _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+        #             elif ext in {".xlsx", ".xls"}:
+        #                 _data = pd.read_excel(up)
+        #             elif ext == ".json":
+        #                 _data = pd.read_json(io.BytesIO(raw))
+        #             elif ext == ".parquet":
+        #                 _data = pd.read_parquet(io.BytesIO(raw))
+        #             elif ext == ".xml":
+        #                 try:
+        #                     _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
+        #                 except Exception:
+        #                     _data = pd.read_xml(io.BytesIO(raw))
+        #             else:
+        #                 st.warning(f"Unsupported extension: {ext}")
+        #                 _data = None
+        #         source_name = up.name
+        #         st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
+        #     except Exception as e:
+        #         st.error(f"Failed to read file: {e}")
+        #         _data, source_name = None, None
+
         # ---- Read uploaded file ---------------------------------------------
         _data, source_name = None, None
+        
+        # Normalize (defensive): sometimes a list sneaks through even with accept_multiple_files=False
+        if isinstance(up, list):
+            up = up[0] if up else None
+        
         if up is not None:
             try:
+                # Pull name + raw bytes safely
+                source_name = getattr(up, "name", None)
+                raw = (
+                    up.getvalue() if hasattr(up, "getvalue")
+                    else (up.read() if hasattr(up, "read") else None)
+                )
+                if raw is None:
+                    raise ValueError("Uploaded object missing readable content")
+        
+                # Cached fast path (if you defined cached_read(bytes, name, xml_xpath=...))
                 if "cached_read" in globals() and callable(globals().get("cached_read")):
-                    _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
+                    _data = cached_read(raw, source_name or "uploaded", xml_xpath=xml_xpath)
                 else:
-                    ext = Path(up.name).suffix.lower()
-                    raw = up.getvalue()
+                    ext = Path(source_name or "").suffix.lower()
+        
                     if ext == ".csv":
-                        _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+                        # Try utf-8, then fallback to latin-1
+                        try:
+                            _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+                        except Exception:
+                            _data = pd.read_csv(io.StringIO(raw.decode("latin-1", "ignore")))
+        
                     elif ext in {".xlsx", ".xls"}:
-                        _data = pd.read_excel(up)
+                        # Pandas can read from file-like buffer
+                        _data = pd.read_excel(io.BytesIO(raw))
+        
                     elif ext == ".json":
-                        _data = pd.read_json(io.BytesIO(raw))
+                        # Try standard JSON; if it fails, try lines
+                        try:
+                            _data = pd.read_json(io.BytesIO(raw))
+                        except ValueError:
+                            _data = pd.read_json(io.BytesIO(raw), lines=True)
+        
                     elif ext == ".parquet":
                         _data = pd.read_parquet(io.BytesIO(raw))
+        
                     elif ext == ".xml":
+                        # Prefer provided XPath; fallback to pandas' default
                         try:
-                            _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
+                            _data = pd.read_xml(io.BytesIO(raw), xpath=(xml_xpath or ".//row"))
                         except Exception:
                             _data = pd.read_xml(io.BytesIO(raw))
+        
                     else:
-                        st.warning(f"Unsupported extension: {ext}")
+                        st.warning(f"Unsupported extension: {ext or 'unknown'}")
                         _data = None
-                source_name = up.name
-                st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
+        
+                # Record shape if we loaded a DataFrame successfully
+                if _data is not None and hasattr(_data, "shape"):
+                    st.session_state["raw_rows"] = int(_data.shape[0])
+                    st.session_state["raw_cols"] = int(_data.shape[1])
+        
             except Exception as e:
                 st.error(f"Failed to read file: {e}")
                 _data, source_name = None, None
 
+        
         # ---- Helpers ---------------------------------------------------------
         def _infer_target(df: pd.DataFrame) -> str:
             if df is None or df.empty or not len(df.columns):
