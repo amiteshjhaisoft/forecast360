@@ -119,6 +119,10 @@ except Exception:
 from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
 
+# DI chat popover
+from deci_int import render_chat_popover
+
+
 
 # Patch once so ALL renders/uploads are captured
 if "kb" not in st.session_state:
@@ -2362,7 +2366,7 @@ def page_getting_started():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
      
-   
+    render_chat_popover()
 # --- app render ---
 if st.session_state.get("show_sidebar"):
     # Sidebar
