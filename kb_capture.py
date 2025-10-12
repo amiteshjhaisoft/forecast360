@@ -30,20 +30,37 @@ except Exception:
 # ---------- utils ----------
 _SLUG = re.compile(r"[^a-z0-9]+", re.I)
 
-
 def _slugify(s: str, max_len: int = 64) -> str:
     s = (_SLUG.sub("_", str(s).strip().lower())).strip("_")
     return s[:max_len] or "untitled"
 
+# Strip common date/time tokens so filenames don't inherit timestamps from titles or uploads
+_DT_PAT = re.compile(
+    r"""
+    (?:\b|\D)
+    (
+      \d{4}[-_/]?\d{2}[-_/]?\d{2}            # 2025-10-12 or 20251012
+      (?:[ T]\d{2}[:\-]?\d{2}(?:[:\-]?\d{2})?)?   # optional time (16:07 or 1607 or 16:07:33)
+      (?:Z|[+-]\d{2}:?\d{2})?                # optional TZ
+    |
+      \b\d{8}\b                              # 20251012
+    |
+      \b\d{6}\b                              # 251012 (yyMMdd) or 161507 (hhmmss)
+    )
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+def _strip_datetime_tokens(s: str) -> str:
+    s2 = _DT_PAT.sub(" ", str(s))
+    return re.sub(r"\s+", " ", s2).strip(" _-.,")
 
 def _now_iso() -> str:
     return _dt.datetime.now().isoformat(timespec="seconds")
 
-
 def _ensure_dir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
-
 
 def _is_pil(x: Any) -> bool:
     try:
@@ -52,7 +69,6 @@ def _is_pil(x: Any) -> bool:
     except Exception:
         return False
 
-
 def _is_np(x: Any) -> bool:
     try:
         import numpy as np
@@ -60,12 +76,10 @@ def _is_np(x: Any) -> bool:
     except Exception:
         return False
 
-
 def _clean_html_text(s: str) -> str:
     s = re.sub(r"<[^>]+>", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
 
 def _fig_to_png_bytes(fig) -> bytes:
     """Render a Matplotlib Figure to PNG bytes RIGHT NOW (safe if Streamlit later clears it)."""
@@ -90,7 +104,6 @@ def _fig_to_png_bytes(fig) -> bytes:
     )
     return buf.getvalue()
 
-
 def _to_png_bytes_from_image_like(x: Any) -> Optional[bytes]:
     try:
         from PIL import Image
@@ -107,10 +120,8 @@ def _to_png_bytes_from_image_like(x: Any) -> Optional[bytes]:
         return None
     return None
 
-
 def _txt(path: Path) -> Path:
     return path.with_suffix(".txt")
-
 
 def kb_compute_version(kb_dir: Path) -> str:
     """
@@ -127,7 +138,6 @@ def kb_compute_version(kb_dir: Path) -> str:
         h.update(p_index.read_bytes())
     return h.hexdigest()[:12]
 
-
 # ---------- capture model ----------
 @dataclass
 class _Item:
@@ -138,15 +148,13 @@ class _Item:
     meta: Dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now_iso)
 
-
 _GLOBAL_BLOCK = "home"
-
 
 def kb_set_block(name: str) -> None:
     """Manually set the logical block name used in filenames."""
     global _GLOBAL_BLOCK
-    _GLOBAL_BLOCK = name.strip() or "home"
-
+    clean = _strip_datetime_tokens(name or "home") or "home"
+    _GLOBAL_BLOCK = clean.strip()
 
 # ---------- main ----------
 class KBCapture:
@@ -205,10 +213,11 @@ class KBCapture:
 
         # headings set the active block
         def _push_block(level_prefix: str, txt: Any):
-            title = str(txt).strip()
-            if title:
-                self._items.append(_Item("markdown", title, f"{level_prefix} {title}"))
-                kb_set_block(title)
+            title_raw = str(txt).strip()
+            if title_raw:
+                title_clean = _strip_datetime_tokens(title_raw)
+                self._items.append(_Item("markdown", title_clean, f"{level_prefix} {title_raw}"))
+                kb_set_block(title_clean)
 
         def _w_title(txt, *a, **k):
             _push_block("#", txt)
@@ -228,7 +237,7 @@ class KBCapture:
             # 1) Any HTML <h1>..</h6>
             m = re.findall(r"<h[1-6][^>]*>(.*?)</h[1-6]>", s, flags=re.I | re.DOTALL)
             if m:
-                return _slugify(_clean_html_text(m[-1]))
+                return _slugify(_strip_datetime_tokens(_clean_html_text(m[-1])))
             # 2) Specific: <div class="block-card">...<h#>Title</h#>...</div>
             m2 = re.findall(
                 r'<div[^>]*class="[^"]*block-card[^"]*"[^>]*>.*?<h[1-6][^>]*>(.*?)</h[1-6]>',
@@ -236,12 +245,12 @@ class KBCapture:
                 flags=re.I | re.DOTALL,
             )
             if m2:
-                return _slugify(_clean_html_text(m2[-1]))
+                return _slugify(_strip_datetime_tokens(_clean_html_text(m2[-1])))
             # 3) Fallback: last ATX (#) heading in text
             for line in s.splitlines()[::-1]:
                 t = line.strip()
                 if t.startswith("#"):
-                    return _slugify(t.lstrip("#").strip())
+                    return _slugify(_strip_datetime_tokens(t.lstrip("#").strip()))
             return None
 
         def _w_markdown(body, *a, **k):
@@ -421,7 +430,8 @@ class KBCapture:
         counters: Dict[Tuple[str, str], int] = defaultdict(int)
 
         for it in self._items:
-            block_slug = _slugify(it.title or "home")
+            # Ensure the block portion of filenames is not timestamp-tainted
+            block_slug = _slugify(_strip_datetime_tokens(it.title) or "home")
 
             if it.kind == "markdown":
                 # Keep the raw markdown text in order (for blocks.md)
@@ -538,13 +548,17 @@ class KBCapture:
 
             if it.kind == "upload":
                 try:
-                    original = _slugify(it.meta.get("original", "upload"), 80)
+                    # Keep extension, remove timestamp from base
+                    original_raw = it.meta.get("original", "upload")
+                    original = _slugify(_strip_datetime_tokens(original_raw), 80)
                     base = original.rsplit(".", 1)
                     if len(base) == 2:
                         bare, ext = base[0], base[1]
                     else:
                         bare, ext = original, "bin"
-                    # Use original name, but avoid clobber within same flush
+                    bare = _slugify(_strip_datetime_tokens(bare), 80) or "upload"
+
+                    # Use original-ish name, but avoid clobber within same flush
                     key = ("upload", bare)
                     counters[key] += 1
                     idx = counters[key]
@@ -552,13 +566,14 @@ class KBCapture:
                         name = f"{bare}.{ext}"
                     else:
                         name = f"{bare}_{idx}.{ext}"
+
                     upath = upl_dir / name
                     upath.write_bytes(it.payload)
 
                     sc_path = _txt(upath.with_suffix(""))
                     sc_text = (
                         f"# {it.title}\n\n"
-                        f"Uploaded file from block **{it.title}**. Original: {it.meta.get('original')}\n"
+                        f"Uploaded file from block **{it.title}**. Original: {original_raw}\n"
                     )
                     sc_path.write_text(sc_text, encoding="utf-8")
 
@@ -569,7 +584,7 @@ class KBCapture:
                         "path": str(upath.relative_to(outdir)),
                         "sidecar": str(sc_path.relative_to(outdir)),
                         "created_at": it.created_at,
-                        "original": it.meta.get("original"),
+                        "original": original_raw,
                     })
                 except Exception:
                     pass
