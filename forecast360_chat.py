@@ -5,24 +5,34 @@
 # - Page interface stays as-is: title, status line, chat history, chat input (no sidebar)
 # Source reference for Azure auth patterns used here: :contentReference[oaicite:0]{index=0}
 
+# --- Core typing/annotations ---
 from __future__ import annotations
-
-import os, glob, time, base64, hashlib, json, shutil, re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
+# --- Stdlib ---
+import base64
+import glob
+import hashlib
+import json
+import os
+import re
+import shutil
+import time
+
+# --- Third-party ---
 import streamlit as st
 import pandas as pd
 
-# ---- Runtime hygiene
+# ---- Runtime hygiene (force CPU-friendly defaults) ----
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-# ---- LangChain / Vector
+# ---- LangChain / Vector (use maintained huggingface wrapper) ----
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import ConversationalRetrievalChain
@@ -31,28 +41,37 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-# Loaders
+# ---- Document loaders (all optional; import-safe if missing backends) ----
 from langchain_community.document_loaders import (
-    PyPDFLoader, BSHTMLLoader, Docx2txtLoader, CSVLoader, UnstructuredPowerPointLoader
+    PyPDFLoader,
+    BSHTMLLoader,
+    Docx2txtLoader,
+    CSVLoader,
+    UnstructuredPowerPointLoader,
 )
 
-# ---- Anthropic (Claude only)
+# ---- Anthropic (Claude only; support both SDK entry points) ----
 try:
-    from anthropic import Anthropic as _AnthropicClientNew
-except Exception:
-    _AnthropicClientNew = None
+    from anthropic import Anthropic as _AnthropicClientNew  # >= v0.21
+except Exception:  # pragma: no cover
+    _AnthropicClientNew = None  # type: ignore[misc]
 try:
-    from anthropic import Client as _AnthropicClientOld
-except Exception:
-    _AnthropicClientOld = None
+    from anthropic import Client as _AnthropicClientOld  # legacy
+except Exception:  # pragma: no cover
+    _AnthropicClientOld = None  # type: ignore[misc]
 
-# ---- Azure SDK (used to pull KB down to ./KB)
+# ---- Azure SDK (optional; used to pull KB down to ./KB) ----
 try:
     from azure.storage.blob import BlobServiceClient, ContainerClient
-    from azure.identity import DefaultAzureCredential
+    try:
+        from azure.identity import DefaultAzureCredential  # optional; falls back to SAS/conn string
+    except Exception:  # pragma: no cover
+        DefaultAzureCredential = None  # type: ignore[assignment]
     _AZURE_OK = True
-except Exception:
+except Exception:  # pragma: no cover
+    BlobServiceClient = ContainerClient = DefaultAzureCredential = None  # type: ignore[assignment]
     _AZURE_OK = False
+
 
 # ---------------- Constants (hardcoded; no sidebar)
 DEFAULT_CLAUDE = "claude-sonnet-4-5"
