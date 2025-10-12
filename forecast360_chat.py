@@ -1,6 +1,6 @@
 # Author: Amitesh Jha | iSoft | 2025-10-12
 # deci_int.py — Streamlit RAG chat (Claude-only, no sidebar, hardcoded settings)
-# - KB source of truth is Azure Blob (downloads to ./KB when remote meta/version.json changes)
+# - KB source of truth is Azure Blob (downloads to ./KB; mirrors prefix even if version.json is absent)
 # - Builds/loads FAISS index from local ./KB
 # - Page interface: title, status line, chat history, chat input (no sidebar)
 
@@ -21,10 +21,10 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 # ---- LangChain / Vector
 from langchain_community.vectorstores import FAISS
-# Compatibility import for HuggingFaceEmbeddings
+# Prefer maintained package; fall back to community path for older stacks
 try:
-    from langchain_huggingface import HuggingFaceEmbeddings  # preferred if available
-except Exception:  # fallback to community path (older stacks)
+    from langchain_huggingface import HuggingFaceEmbeddings
+except Exception:
     from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
@@ -251,17 +251,33 @@ def _azure_kb_version() -> Optional[str]:
     except Exception:
         return None
 
+def _download_entire_prefix(cli: "ContainerClient", prefix: str, dest: Path) -> int:
+    """Mirror ALL blobs under prefix into dest. Returns number of files downloaded."""
+    count = 0
+    prefix = prefix.rstrip("/") + "/" if prefix else ""
+    for blob in cli.list_blobs(name_starts_with=prefix or None):
+        rel = blob.name[len(prefix):] if prefix else blob.name
+        if not rel or rel.endswith("/"):
+            continue
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = cli.download_blob(blob.name).readall()
+            with open(target, "wb") as f:
+                f.write(data)
+            count += 1
+        except Exception:
+            # best-effort; skip broken blobs
+            pass
+    return count
+
 def sync_kb_from_azure_if_needed() -> Path:
     """
-    If Azure has a different KB version, mirror prefix -> ./KB (download all files).
+    If Azure has a different KB version, or local KB is empty/missing meta,
+    mirror prefix -> ./KB (download all files).
     """
     kb_root = _local_kb_dir()
     if not _AZURE_OK:
-        return kb_root
-
-    remote_ver = _azure_kb_version()
-    local_ver  = _kb_local_version()
-    if (remote_ver is None) or (remote_ver == local_ver):
         return kb_root
 
     cli = _azure_container_client()
@@ -269,7 +285,18 @@ def sync_kb_from_azure_if_needed() -> Path:
         return kb_root
 
     cfg  = _azure_cfg()
-    pref = cfg["prefix"].rstrip("/") + "/"
+    pref = cfg["prefix"].rstrip("/") if cfg["prefix"] else ""
+
+    remote_ver = _azure_kb_version()
+    local_ver  = _kb_local_version()
+
+    local_empty = len(list(kb_root.rglob("*"))) == 0
+
+    # Re-mirror when: versions differ OR remote unknown but local empty/has no meta
+    should_mirror = (remote_ver is not None and remote_ver != local_ver) or (remote_ver is None and local_empty)
+
+    if not should_mirror:
+        return kb_root
 
     # wipe local KB to avoid stale files
     try:
@@ -278,15 +305,13 @@ def sync_kb_from_azure_if_needed() -> Path:
         pass
     kb_root.mkdir(parents=True, exist_ok=True)
 
-    # download every blob under prefix
-    for blob in cli.list_blobs(name_starts_with=pref):
-        rel = blob.name[len(pref):]
-        target = kb_root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        data = cli.download_blob(blob).readall()
-        with open(target, "wb") as f:
-            f.write(data)
-
+    downloaded = _download_entire_prefix(cli, pref, kb_root)
+    # If version was unknown but we downloaded successfully, try to fetch meta again
+    if downloaded > 0 and remote_ver is None:
+        try:
+            remote_ver = _azure_kb_version()
+        except Exception:
+            pass
     return kb_root
 
 # ---------------- Small utils
@@ -384,7 +409,6 @@ class ChunkingConfig:
 
 @st.cache_resource(show_spinner=False)
 def _cached_embeddings() -> HuggingFaceEmbeddings:
-    # Lazy, cached (prevents slow startup/health-check failures)
     return HuggingFaceEmbeddings(
         model_name=_EMB_MODEL,
         model_kwargs=_EMB_MODEL_KW,
@@ -392,7 +416,6 @@ def _cached_embeddings() -> HuggingFaceEmbeddings:
     )
 
 def _make_embeddings():
-    # Keep a tiny wrapper for future toggles; returns cached instance
     return _cached_embeddings()
 
 def _faiss_dir(persist_dir: str, collection_name: str) -> Path:
