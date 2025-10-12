@@ -1,10 +1,9 @@
 # Author: Amitesh Jha | iSoft | 2025-10-12
-# deci_int.py — Popover RAG chat (Claude.ai only) with flexible, user-adjustable size
+# deci_int.py — Compact popover RAG chat (Claude.ai only, resizable popover)
 # - Syncs Knowledge Base (KB) from Azure Blob via KB/meta/version.json
 # - Builds/loads FAISS index from local ./KB
 # - Exposes render_chat_popover() to embed in forecast360_app.py
-# - Default model: Claude Sonnet 4-5 (no other providers)
-
+# - Default model: claude-sonnet-4-5
 from __future__ import annotations
 
 import os, glob, time, base64, hashlib, json, shutil, re
@@ -15,12 +14,12 @@ from typing import List, Tuple, Optional, Dict, Any
 import streamlit as st
 import pandas as pd
 
-# ---------------- Runtime hygiene ----------------
+# ---- Runtime hygiene
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-# ---------------- LangChain / Vector store ----------------
+# ---- LangChain / Vector store (no OpenAI)
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -36,7 +35,7 @@ from langchain_community.document_loaders import (
     PyPDFLoader, BSHTMLLoader, Docx2txtLoader, CSVLoader, UnstructuredPowerPointLoader
 )
 
-# Anthropic (Claude)
+# ---- Anthropic (Claude only)
 try:
     from anthropic import Anthropic as _AnthropicClientNew
 except Exception:
@@ -46,15 +45,15 @@ try:
 except Exception:
     _AnthropicClientOld = None
 
-# Optional Azure Blob SDK (KB sync only)
+# ---- Azure Blob SDK (optional but recommended for KB sync)
 try:
     from azure.storage.blob import ContainerClient
     _AZURE_OK = True
 except Exception:
     _AZURE_OK = False
 
-# ---------------- Constants ----------------
-DEFAULT_CLAUDE = "claude-sonnet-4-5"  # Claude-only
+# ---------------- Constants
+DEFAULT_CLAUDE = "claude-sonnet-4-5"
 _EMB_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _EMB_MODEL_KW = {"device": "cpu", "trust_remote_code": False}
 _ENCODE_KW = {"normalize_embeddings": True}
@@ -75,7 +74,7 @@ GREETING_RE = re.compile(
 
 VectorStoreType = FAISS
 
-# ---------------- Minimal Claude wrapper ----------------
+# ---------------- Minimal Claude wrapper (no tools, plain text)
 class ClaudeDirect(BaseChatModel):
     model: str = DEFAULT_CLAUDE
     temperature: float = 0.2
@@ -94,9 +93,11 @@ class ClaudeDirect(BaseChatModel):
         out = []
         for m in messages:
             role = "user" if m.type == "human" else ("assistant" if m.type == "ai" else "user")
-            text = m.content if isinstance(m.content, str) else "".join(
-                p.get("text", "") if isinstance(p, dict) else str(p) for p in (m.content or [])
-            )
+            if isinstance(m.content, str):
+                text = m.content
+            else:
+                parts = m.content or []
+                text = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in parts)
             out.append({"role": role, "content": [{"type": "text", "text": text}]})
         return out
 
@@ -115,11 +116,11 @@ class ClaudeDirect(BaseChatModel):
         ai = AIMessage(content=text)
         return ChatResult(generations=[ChatGeneration(message=ai)])
 
-# ---------------- Theme / CSS ----------------
+# ---------------- Theme / CSS
 try:
     st.set_page_config(page_title="Forecast360 • Chat", page_icon="💬", layout="wide")
 except Exception:
-    pass  # outer app may set this
+    pass
 
 def _first_existing(paths: list[Optional[Path]]) -> Optional[Path]:
     for p in paths:
@@ -156,23 +157,29 @@ asst_bg  = f"background-image:url('{ASSIST_AVATAR_URI}');" if ASSIST_AVATAR_URI 
 
 st.markdown(f"""
 <style>
-:root{{ --bg:#f7f8fb; --panel:#fff; --text:#0b1220; --border:#e7eaf2; --bubble-user:#eef4ff; --bubble-assist:#f6f7fb; --muted:#5d6b82; --accent:#2563eb; }}
-.chat-card{{ background:var(--panel); border:1px solid var(--border); border-radius:14px; box-shadow:0 6px 16px rgba(16,24,40,.05); overflow:hidden; }}
-.chat-scroll{{ max-height: 75vh; overflow:auto; padding:.65rem .9rem; }}
+:root{{ --bg:#f7f8fb; --panel:#fff; --text:#0b1220; --border:#e7eaf2;
+       --bubble-user:#eef4ff; --bubble-assist:#f6f7fb; --accent:#2563eb; }}
+.chat-card{{ background:var(--panel); border:1px solid var(--border); border-radius:14px;
+            box-shadow:0 6px 16px rgba(16,24,40,.05); overflow:hidden; }}
 .msg{{ display:flex; align-items:flex-start; gap:.65rem; margin:.45rem 0; }}
-.avatar{{ width:32px; height:32px; border-radius:50%; border:1px solid var(--border); background-size:cover; background-position:center; background-repeat:no-repeat; flex:0 0 32px; }}
+.avatar{{ width:32px; height:32px; border-radius:50%; border:1px solid var(--border);
+          background-size:cover; background-position:center; background-repeat:no-repeat; flex:0 0 32px; }}
 .avatar.user {{ {user_bg} }}
 .avatar.assistant {{ {asst_bg} }}
-.bubble{{ border:1px solid var(--border); background:var(--bubble-assist); padding:.8rem .95rem; border-radius:12px; max-width:860px; white-space:pre-wrap; line-height:1.45; }}
+.bubble{{ border:1px solid var(--border); background:var(--bubble-assist);
+         padding:.8rem .95rem; border-radius:12px; max-width:860px; white-space:pre-wrap; line-height:1.45; }}
 .msg.user .bubble{{ background:var(--bubble-user); }}
-.composer{{ padding:.6rem .75rem; border-top:1px solid var(--border); background:#fff; position:sticky; bottom:0; z-index:2; }}
-.status-inline{{ width:100%; border:1px solid var(--border); background:#fafcff; border-radius:10px; padding:.5rem .7rem; font-size:.9rem; color:#111827; margin:.5rem 0 .8rem; }}
-.small-note{{ color:var(--muted); font-size:.78rem; margin-top:.25rem; }}
-.size-ctrl .stSlider, .size-ctrl .stButton {{ margin-top: .25rem; }}
+.toolbar{{ display:flex; align-items:center; justify-content:space-between; gap:.5rem;
+          padding:.5rem .6rem; border-bottom:1px solid var(--border); background:#fff; }}
+.toolbar .left, .toolbar .right{{ display:flex; align-items:center; gap:.5rem; }}
+.btn{{ border:1px solid var(--border); padding:.25rem .55rem; border-radius:10px; background:#fff; cursor:pointer; }}
+.btn:hover{{ background:#f5f7ff; }}
+.status-inline{{ width:100%; border:1px solid var(--border); background:#fafcff; border-radius:10px;
+                padding:.5rem .7rem; font-size:.9rem; color:#111827; margin:.5rem 0 .8rem; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- KB + Azure helpers ----------------
+# ---------------- KB + Azure helpers
 def _local_kb_dir() -> Path:
     p = Path.cwd() / "KB"
     p.mkdir(parents=True, exist_ok=True)
@@ -242,12 +249,14 @@ def sync_kb_from_azure_if_needed() -> Path:
     pref = cfg["prefix"].rstrip("/") + "/"
     dest = _local_kb_dir()
 
+    # wipe local KB to avoid stale files
     try:
         shutil.rmtree(dest, ignore_errors=True)
     except Exception:
         pass
     dest.mkdir(parents=True, exist_ok=True)
 
+    # download every blob under prefix
     for blob in cli.list_blobs(name_starts_with=pref):
         rel = blob.name[len(pref):]
         target = dest / rel
@@ -258,7 +267,7 @@ def sync_kb_from_azure_if_needed() -> Path:
 
     return dest
 
-# ---------------- Small utils ----------------
+# ---------------- Small utils
 def human_time(ms: float) -> str:
     return f"{ms:.0f} ms" if ms < 1000 else f"{ms/1000:.2f} s"
 
@@ -286,7 +295,7 @@ def compute_kb_signature(folder: str) -> Tuple[str, int]:
     raw = "\n".join(lines) + str(SUPPORTED_TEXT_DOCS)
     return stable_hash(raw if raw else f"EMPTY-{time.time()}"), len(files)
 
-# ---------------- Loading ----------------
+# ---------------- Loading
 def _fallback_read(path: str) -> str:
     try:
         if path.lower().endswith(tuple(SPREADSHEET_EXTS)):
@@ -345,7 +354,7 @@ def load_documents(folder: str) -> List[Document]:
         docs.extend(load_one(path))
     return docs
 
-# ---------------- Indexing (FAISS) ----------------
+# ---------------- Indexing (FAISS)
 @dataclass
 class ChunkingConfig:
     chunk_size: int = 1200
@@ -355,8 +364,6 @@ def _make_embeddings():
     key = f"_emb_model_cache::{_EMB_MODEL}"
     if key in st.session_state:
         return st.session_state[key]
-
-    # Sentence-Transformers (CPU)
     embeddings = HuggingFaceEmbeddings(
         model_name=_EMB_MODEL,
         model_kwargs=_EMB_MODEL_KW,
@@ -384,8 +391,8 @@ def index_folder_langchain(folder: str, persist_dir: str, collection_name: str,
     )
     splat = splitter.split_documents(raw_docs)
     embeddings = _make_embeddings()
-    faiss_db = FAISS.from_documents(documents=splat, embedding=embeddings)
 
+    faiss_db = FAISS.from_documents(documents=splat, embedding=embeddings)
     faiss_dir.mkdir(parents=True, exist_ok=True)
     faiss_db.save_local(str(faiss_dir))
     return (len(raw_docs), len(splat))
@@ -394,11 +401,9 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
     key = f"_vs::{persist_dir}::{collection_name}::{emb_model}"
     if key in st.session_state:
         return st.session_state[key]
-
     faiss_path = _faiss_dir(persist_dir, collection_name)
     if not faiss_path.exists():
         return None
-
     try:
         vs = FAISS.load_local(
             folder_path=str(faiss_path),
@@ -411,7 +416,7 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
         st.error(f"Failed to load FAISS index from disk. Error: {e}")
         return None
 
-# ---------------- Anthropic init ----------------
+# ---------------- Claude init
 def _strip_proxy_env() -> None:
     for v in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"):
         os.environ.pop(v, None)
@@ -421,7 +426,6 @@ def _get_secret_api_key() -> Optional[str]:
         s = st.secrets
     except Exception:
         s = None
-
     if s:
         for k in ("ANTHROPIC_API_KEY","anthropic_api_key","CLAUDE_API_KEY","claude_api_key"):
             v = s.get(k)
@@ -452,7 +456,7 @@ def _anthropic_client_from_secrets():
         return _AnthropicClientOld(api_key=api_key)
     raise RuntimeError("Anthropic SDK not installed correctly.")
 
-def make_llm(model_name: str, temperature: float) -> BaseChatModel:
+def make_llm(model_name: str, temperature: float):
     client = _anthropic_client_from_secrets()
     return ClaudeDirect(client=client, model=model_name or DEFAULT_CLAUDE,
                         temperature=temperature, max_tokens=800)
@@ -464,7 +468,7 @@ def make_chain(vs: VectorStoreType, llm: BaseChatModel, k: int):
         llm=llm, retriever=retriever, memory=memory, return_source_documents=True, verbose=False
     )
 
-# ---------------- Defaults + auto-index ----------------
+# ---------------- Defaults + auto-index
 def settings_defaults() -> Dict[str, Any]:
     kb_dir = str(_local_kb_dir())
     return {
@@ -473,14 +477,10 @@ def settings_defaults() -> Dict[str, Any]:
         "base_folder": kb_dir,
         "emb_model": _EMB_MODEL,
         "chunk_cfg": ChunkingConfig(),
-        # LLM defaults (Claude only)
         "claude_model": DEFAULT_CLAUDE,
         "temperature": 0.2,
         "top_k": 5,
         "auto_index_min_interval_sec": 8,
-        # UI state (user-adjustable popover size)
-        "_chat_width_px": 560,
-        "_chat_height_px": 520,
     }
 
 def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optional[VectorStoreType]:
@@ -540,7 +540,7 @@ def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optiona
     except Exception:
         return None
 
-# ---------------- UI helpers ----------------
+# ---------------- UI helpers
 def _avatar_for_role(role: str) -> Optional[str]:
     if role == "user" and USER_AVATAR_PATH:
         return str(USER_AVATAR_PATH)
@@ -554,7 +554,7 @@ def render_chat_history():
         with st.chat_message(role, avatar=_avatar_for_role(role)):
             st.markdown(message["content"])
 
-# ---------------- LLM & Chain ----------------
+# ---------------- LLM & Chain
 def make_llm_and_chain(vs: VectorStoreType):
     model_name = st.session_state["claude_model"]
     llm = make_llm(model_name, float(st.session_state["temperature"]))
@@ -627,13 +627,13 @@ def handle_user_input(query: str, vs: Optional[VectorStoreType]):
         st.rerun(); return
 
     if vs is None:
-        st.session_state["messages"].append({"role": "assistant", "content": "Vector store unavailable. Check settings and ensure the FAISS index exists."})
+        st.session_state["messages"].append({"role": "assistant", "content": "Vector store unavailable. Ensure the FAISS index exists."})
         st.rerun(); return
 
     t0 = time.time()
     try:
         _, chain = make_llm_and_chain(vs)
-        with st.spinner("Querying Claude (Anthropic) with RAG..."):
+        with st.spinner("Querying Claude with RAG..."):
             result = chain.invoke({"question": query})
             answer = result.get("answer", "").strip() or "Not found in Knowledge Base."
             sources = result.get("source_documents", []) or []
@@ -645,65 +645,78 @@ def handle_user_input(query: str, vs: Optional[VectorStoreType]):
     st.session_state["messages"].append({"role": "assistant", "content": msg})
     st.rerun()
 
-# ---------------- Popover Chat (call from forecast360_app.py) ----------------
+# ---------------- Resizable Popover Chat (call from forecast360_app.py)
 def render_chat_popover():
     """
-    Renders a compact, professional chat popover (Claude-only).
-    - Flexible size: user can freely increase/decrease width & height.
+    Renders a resizable chat in a popover. Call from forecast360_app.py at any place.
     """
+    # Sync local KB with Azure (no-op if already latest)
     kb_dir = sync_kb_from_azure_if_needed()
 
+    # Defaults
     for k, v in settings_defaults().items():
         st.session_state.setdefault(k, v)
     st.session_state["base_folder"] = str(kb_dir)
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
     st.session_state.setdefault("messages", [{"role":"assistant","content":"Hi! Ask anything about your Knowledge Base."}])
 
+    # Resizing state (user can change any time)
+    st.session_state.setdefault("chat_height_px", 480)      # container height
+    st.session_state.setdefault("chat_width_px", 520)       # visual width
+    st.session_state.setdefault("claude_model", DEFAULT_CLAUDE)
+
+    # Popover (avoid deprecated use_container_width)
     with st.popover("💬 Ask Forecast360", width="content"):
-        st.caption("Powered by Claude (Sonnet 4-5). Uses the latest KB snapshot.")
+        # Toolbar: model + sizing controls
+        col_l, col_r = st.columns([0.65, 0.35])
+        with col_l:
+            # Minimal model choices; default remains Sonnet 4-5
+            model = st.selectbox(
+                "Claude model",
+                options=[
+                    "claude-sonnet-4-5",
+                    "claude-3-7-sonnet-2025-05-21",
+                    "claude-3-7-haiku-2025-05-21",
+                    "claude-3-opus-20240229"
+                ],
+                index=0,
+                key="claude_model",
+                help="Default is claude-sonnet-4-5"
+            )
+        with col_r:
+            # Size controls: width & height sliders (fine-grained, immediate)
+            st.session_state["chat_width_px"] = st.slider("Width (px)", 380, 1000, st.session_state["chat_width_px"], 10, key="chat_w")
+            st.session_state["chat_height_px"] = st.slider("Height (px)", 320, 900, st.session_state["chat_height_px"], 10, key="chat_h")
 
-        # --- Size controls (continuous): sliders + quick +/- buttons
-        w, h = st.session_state["_chat_width_px"], st.session_state["_chat_height_px"]
-        colA, colB, colC, colD, colE = st.columns([1.2, 1, 0.4, 0.4, 0.6], vertical_alignment="bottom")
-        with colA:
-            st.markdown("**Window Size**")
-            w = st.slider("Width (px)", 360, 1000, int(w), 10, key="di_w", label_visibility="collapsed")
-            h = st.slider("Height (px)", 280, 1000, int(h), 10, key="di_h", label_visibility="collapsed")
-        with colB:
-            st.markdown("&nbsp;")
-            if st.button("Reset", use_container_width=True):
-                w, h = 560, 520
-        with colC:
-            st.markdown("&nbsp;")
-            if st.button("−", use_container_width=True, help="Smaller"):
-                w = max(360, w - 40); h = max(280, h - 40)
-        with colD:
-            st.markdown("&nbsp;")
-            if st.button("+", use_container_width=True, help="Larger"):
-                w = min(1000, w + 40); h = min(1000, h + 40)
-        with colE:
-            st.markdown(f"<div class='small-note'>Current: {w}×{h}px</div>", unsafe_allow_html=True)
-
-        st.session_state["_chat_width_px"] = int(w)
-        st.session_state["_chat_height_px"] = int(h)
-
-        # Build/load index on demand
+        # Status + auto-index
         status = st.empty()
         vs = auto_index_if_needed(status_placeholder=status)
 
-        # Chat area (width wrapper + fixed-height container)
-        st.markdown(f"<div style='width:{int(w)}px'>", unsafe_allow_html=True)
-        with st.container(border=True, height=int(h)):
-            render_chat_history()
-        st.markdown("</div>", unsafe_allow_html=True)
+        # Wrapper to enforce width via CSS (popover itself sizes to content)
+        wrap_w = st.session_state["chat_width_px"]
+        st.markdown(f'<div style="width:{wrap_w}px;">', unsafe_allow_html=True)
+
+        # Chat panel
+        st.markdown('<div class="chat-card">', unsafe_allow_html=True)
+        h = int(st.session_state["chat_height_px"])
+        chat_area = st.container(height=h-92 if h>160 else 420, border=False)
+        with chat_area:
+            for message in st.session_state.get("messages", []):
+                role = message["role"]
+                with st.chat_message(role, avatar=_avatar_for_role(role)):
+                    st.markdown(message["content"])
 
         # Composer
         q = st.chat_input("Ask about the current snapshot…")
+        st.markdown("</div>", unsafe_allow_html=True)  # end chat-card
+        st.markdown("</div>", unsafe_allow_html=True)  # end width wrapper
+
         if q:
             handle_user_input(q.strip(), vs)
 
-# ---------------- Minimal standalone main (no sidebar) ----------------
+# ---------------- Minimal standalone main (optional local run)
 def main():
+    # Defaults + KB sync on load
     for k, v in settings_defaults().items():
         st.session_state.setdefault(k, v)
     kb_dir = sync_kb_from_azure_if_needed()
@@ -711,18 +724,16 @@ def main():
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
     st.session_state.setdefault("messages", [{"role": "assistant", "content": "Hi! Ask anything about your Knowledge Base."}])
 
-    st.markdown("### 💬 Chat with your Knowledge Base (Claude · RAG)")
+    st.markdown("### 💬 Chat with your Knowledge Base (RAG • Claude.ai)")
     hero_status = st.container()
     vs = auto_index_if_needed(status_placeholder=hero_status)
 
+    # A full-page chat (if you want), plus the popover
     st.markdown('<div class="chat-card">', unsafe_allow_html=True)
-    st.markdown('<div class="chat-scroll">', unsafe_allow_html=True)
-    render_chat_history()
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="composer">', unsafe_allow_html=True)
-    user_text = st.chat_input("Type your question...", key="user_prompt_input")
-    st.markdown("</div>", unsafe_allow_html=True)
+    chat_area = st.container(height=540, border=False)
+    with chat_area:
+        render_chat_history()
+    user_text = st.chat_input("Type your question...")
     st.markdown("</div>", unsafe_allow_html=True)
 
     if user_text and user_text.strip():
