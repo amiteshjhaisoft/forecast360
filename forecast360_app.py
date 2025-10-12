@@ -2366,7 +2366,7 @@ def page_getting_started():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
      
-    render_chat_popover()
+    # render_chat_popover()
 # --- app render ---
 if st.session_state.get("show_sidebar"):
     # Sidebar
