@@ -671,7 +671,7 @@ def main():
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
 
     # 3) Auto-index
-    st.markdown("### 💬 Chat with your Knowledge Base (RAG • Claude.ai)")
+    st.markdown("### 💬 Chat with Forecast360")
     hero_status = st.container()
     vs = auto_index_if_needed(status_placeholder=hero_status)
 
