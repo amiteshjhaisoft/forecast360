@@ -48,3 +48,5 @@ langsmith       # If you turn on tracing/telemetry
 azure-storage-blob>=12.22.0
 azure-identity>=1.17.1
 
+langchain-openai>=0.1.7
+
