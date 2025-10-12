@@ -709,7 +709,7 @@ def render_chat_popover():
     except Exception:
         has_openai = False
 
-    with st.popover("💬 Ask Forecast360", use_container_width=False):
+    with st.popover("💬 Ask Forecast360", use_column_width=False):
         # Top controls row
         st.caption("Uses the latest Knowledge Base snapshot")
         c1, c2, c3 = st.columns([1.2, 0.9, 0.9])
@@ -744,9 +744,9 @@ def render_chat_popover():
         with c3:
             st.write("")  # spacing
             bcol1, bcol2, _ = st.columns([1,1,2])
-            if bcol1.button("−", use_container_width=True):
+            if bcol1.button("−", use_column_width=True):
                 st.session_state["di_chat_height"] = max(240, int(st.session_state["di_chat_height"]) - 60)
-            if bcol2.button("+", use_container_width=True):
+            if bcol2.button("+", use_column_width=True):
                 st.session_state["di_chat_height"] = min(900, int(st.session_state["di_chat_height"]) + 60)
 
         # Status + index refresh (silent/professional)
