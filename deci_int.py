@@ -143,7 +143,8 @@ def _resolve_avatar_paths() -> Tuple[Optional[Path], Optional[Path]]:
 def _img_to_data_uri(path: Optional[Path]) -> Optional[str]:
     if not path or not path.exists():
         return None
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    import base64 as _b64
+    b64 = _b64.b64encode(path.read_bytes()).decode("ascii")
     ext = (path.suffix.lower().lstrip(".") or "png")
     mime = "image/png" if ext in ("png", "apng") else ("image/jpeg" if ext in ("jpg", "jpeg") else "image/svg+xml")
     return f"data:{mime};base64,{b64}"
@@ -416,7 +417,7 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
     if key in st.session_state:
         return st.session_state[key]
 
-    faiss_path = _faiss_dir(persist_dir, colname=collection_name)
+    faiss_path = _faiss_dir(persist_dir, collection_name)  # fixed kw bug
     if not faiss_path.exists():
         return None
 
@@ -709,14 +710,14 @@ def render_chat_popover():
     except Exception:
         has_openai = False
 
-    with st.popover("💬 Ask Forecast360", use_column_width=False):
-        # Top controls row
+    with st.popover("💬 Ask Forecast360", use_container_width=False):
         st.caption("Uses the latest Knowledge Base snapshot")
         c1, c2, c3 = st.columns([1.2, 0.9, 0.9])
 
         # Provider dropdown (Claude default)
         options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
-        default_idx = options.index(st.session_state.get("backend", "Claude (Anthropic)")) if st.session_state.get("backend", "Claude (Anthropic)") in options else 0
+        current_backend = st.session_state.get("backend", "Claude (Anthropic)")
+        default_idx = options.index(current_backend) if current_backend in options else 0
         with c1:
             choice = st.selectbox("Model", options=options, index=default_idx, label_visibility="visible")
         backend = str(choice or "Claude (Anthropic)")
@@ -724,14 +725,12 @@ def render_chat_popover():
             st.warning("Install `langchain-openai>=0.1.7` to enable Azure OpenAI. Falling back to Claude.", icon="⚠️")
             backend = "Claude (Anthropic)"
         st.session_state["backend"] = backend
-        # Keep fixed default models (hidden from UI)
         st.session_state.setdefault("claude_model", DEFAULT_CLAUDE)
         st.session_state.setdefault("azure_model", os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or "gpt-4o")
 
         # Size controls
         size_map = {"Small": 300, "Medium": 420, "Large": 600}
         current_h = int(st.session_state.get("di_chat_height", 420))
-        # infer current label
         inv_map = {v: k for k, v in size_map.items()}
         current_label = inv_map.get(current_h, "Medium")
 
@@ -742,14 +741,14 @@ def render_chat_popover():
             st.session_state["di_chat_height"] = size_map[sel]
 
         with c3:
-            st.write("")  # spacing
+            st.write("")
             bcol1, bcol2, _ = st.columns([1,1,2])
-            if bcol1.button("−", use_column_width=True):
+            if bcol1.button("−", use_container_width=True):
                 st.session_state["di_chat_height"] = max(240, int(st.session_state["di_chat_height"]) - 60)
-            if bcol2.button("+", use_column_width=True):
+            if bcol2.button("+", use_container_width=True):
                 st.session_state["di_chat_height"] = min(900, int(st.session_state["di_chat_height"]) + 60)
 
-        # Status + index refresh (silent/professional)
+        # Status + index refresh
         status = st.empty()
         vs = auto_index_if_needed(status_placeholder=status)
 
