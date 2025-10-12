@@ -50,3 +50,19 @@ azure-identity>=1.17.1
 
 langchain-openai>=0.1.7
 
+
+# --- Embeddings / Vector ---
+sentence-transformers>=3.0      # needed by _make_embeddings()
+faiss-cpu>=1.8                  # you already have, keep >=1.8
+
+# --- Model SDKs ---
+anthropic>=0.34                 # direct Claude client used in deci_int.py
+
+# --- Document loaders used by deci_int.py ---
+docx2txt>=0.8                   # Docx2txtLoader
+beautifulsoup4>=4.12            # BSHTMLLoader
+lxml>=4.9                       # (parser for bs4; optional but recommended)
+unstructured>=0.15              # UnstructuredPowerPointLoader
+python-pptx>=0.6.23             # .pptx support for unstructured
+
+
