@@ -1,6 +1,6 @@
 # Author: Amitesh Jha | iSOFT
+# kb_capture.py — capture-only KB writer (tables/figs/images/html/uploads) + TEXT SIDECARS + META INDEX + VERSION
 
-# kb_capture.py — capture-only KB writer (tables/figs/images/html/uploads) + TEXT SIDECARS + META INDEX
 from __future__ import annotations
 
 import io, re, json, hashlib, datetime as _dt
@@ -93,6 +93,22 @@ def _txt(path: Path) -> Path:
     return path.with_suffix(".txt")
 
 
+def kb_compute_version(kb_dir: Path) -> str:
+    """
+    Compute a short content version for the KB using blocks.md + index.json.
+    Returns a 12-char hex prefix of sha256 to be used as a cache/version key.
+    """
+    kb_dir = Path(kb_dir)
+    h = hashlib.sha256()
+    p_blocks = kb_dir / "text" / "blocks.md"
+    p_index = kb_dir / "meta" / "index.json"
+    if p_blocks.exists():
+        h.update(p_blocks.read_bytes())
+    if p_index.exists():
+        h.update(p_index.read_bytes())
+    return h.hexdigest()[:12]
+
+
 # ---------- capture model ----------
 @dataclass
 class _Item:
@@ -122,10 +138,11 @@ class KBCapture:
     Creates these subfolders:
       tables/, figs/, images/, html/, uploads/, text/, meta/
 
-    **New in this custom build**
     - Writes **sidecar text** for figs/images/html so embedders have semantics.
-    - Writes a **blocks.md** concatenation of captured markdown.
-    - Emits **meta/index.json** with one entry per artifact: kind, block, title, path, sidecar, created_at, extras.
+    - Writes a **text/blocks.md** concatenation of captured markdown.
+    - Emits **meta/index.json** with one entry per artifact.
+    - NEW: emits **meta/version.json** with {"version": "<12hex>", "created_at": "..."}.
+           Also exposes `self.last_version`.
     """
 
     def __init__(self, folder_name: str):
@@ -135,6 +152,7 @@ class KBCapture:
         self._items: List[_Item] = []
         self._orig: Dict[str, Any] = {}
         self._patched = False
+        self.last_version: Optional[str] = None  # filled on flush()
 
     # ----- patch -----
     def patch(self) -> "KBCapture":
@@ -191,7 +209,7 @@ class KBCapture:
 
             # 2) Specific: <div class="block-card">...<h#>Title</h#>...</div>
             m2 = re.findall(
-                r'<div[^>]*class="[^"]*block-card[^"]*"[^>]*>.*?<h[1-6][^>]*>(.*?)</h[1-6]> ',
+                r'<div[^>]*class="[^"]*block-card[^"]*"[^>]*>.*?<h[1-6][^>]*>(.*?)</h[1-6]>',
                 s,
                 flags=re.I | re.DOTALL,
             )
@@ -570,6 +588,18 @@ class KBCapture:
         (meta_dir / "index.json").write_text(
             json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+        # 3) NEW — Version manifest (after blocks.md + index.json exist)
+        try:
+            version = kb_compute_version(outdir)
+            (meta_dir / "version.json").write_text(
+                json.dumps({"version": version, "created_at": _now()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            self.last_version = version
+        except Exception:
+            # don't break flush on version write failure
+            self.last_version = None
 
         # clear buffer after flush
         self._items.clear()
