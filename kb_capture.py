@@ -336,15 +336,17 @@ class KBCapture:
             return self._orig["altair_chart"](chart, *a, **k)
 
         def _w_uploader(*a, **k):
+            # Call original uploader
             uploaded = self._orig["file_uploader"](*a, **k)
             try:
                 if uploaded is not None:
-                    if not isinstance(uploaded, list):
-                        uploaded = [uploaded]
-                    for u in uploaded:
+                    # Capture as a sequence, but DO NOT change the returned type
+                    seq = uploaded if isinstance(uploaded, list) else [uploaded]
+                    for u in seq:
                         self._capture_upload(u)
             except Exception:
                 pass
+            # IMPORTANT: return exactly what the original returned (single UploadedFile or list)
             return uploaded
 
         # patch
@@ -399,7 +401,7 @@ class KBCapture:
             return f"{base}.{ext}"
         return f"{base}_{idx}.{ext}"
 
-    def flush(self) -> str:
+    def flush(self, ai_summary: Optional[bool] | None = None, keep_last: Optional[int] | None = None, **_kwargs) -> str:
         outdir = _ensure_dir(self._outdir())
 
         # subdirs
