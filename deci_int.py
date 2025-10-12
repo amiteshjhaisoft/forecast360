@@ -359,13 +359,37 @@ def _make_embeddings():
     key = f"_emb_model_cache::{_EMB_MODEL}"
     if key in st.session_state:
         return st.session_state[key]
-    embeddings = HuggingFaceEmbeddings(
-        model_name=_EMB_MODEL,
-        model_kwargs=_EMB_MODEL_KW,
-        encode_kwargs=_ENCODE_KW,
-    )
+
+    # Try Sentence-Transformers (CPU)
+    try:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        embeddings = HuggingFaceEmbeddings(
+            model_name=_EMB_MODEL,
+            model_kwargs=_EMB_MODEL_KW,
+            encode_kwargs=_ENCODE_KW,
+        )
+    except Exception:
+        # Fallback: Azure OpenAI embeddings (requires env/secrets)
+        try:
+            from langchain_openai import AzureOpenAIEmbeddings  # lazy import
+            embeddings = AzureOpenAIEmbeddings(
+                azure_deployment=os.getenv("AZURE_OPENAI_EMBED_DEPLOYMENT") or "text-embedding-3-large",
+                openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION","2024-02-01"),
+            )
+            st.info("Using Azure OpenAI embeddings fallback.", icon="ℹ️")
+        except Exception as e:
+            raise RuntimeError(
+                "Embeddings unavailable. Either:\n"
+                "  • pip install sentence-transformers\n"
+                "  • or set Azure OpenAI env vars: AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, "
+                "AZURE_OPENAI_API_VERSION, AZURE_OPENAI_EMBED_DEPLOYMENT"
+            ) from e
+
     st.session_state[key] = embeddings
     return embeddings
+
 
 def _faiss_dir(persist_dir: str, collection_name: str) -> Path:
     return Path(persist_dir).expanduser().resolve() / collection_name
