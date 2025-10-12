@@ -21,7 +21,11 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 # ---- LangChain / Vector
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings   # <- updated import (maintained path)
+# Compatibility import for HuggingFaceEmbeddings
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings  # preferred if available
+except Exception:  # fallback to community path (older stacks)
+    from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import ConversationalRetrievalChain
