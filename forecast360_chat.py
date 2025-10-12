@@ -2,37 +2,26 @@
 # deci_int.py — Streamlit RAG chat (Claude-only, no sidebar, hardcoded settings)
 # - KB source of truth is Azure Blob (downloads to ./KB when remote meta/version.json changes)
 # - Builds/loads FAISS index from local ./KB
-# - Page interface stays as-is: title, status line, chat history, chat input (no sidebar)
-# Source reference for Azure auth patterns used here: :contentReference[oaicite:0]{index=0}
+# - Page interface: title, status line, chat history, chat input (no sidebar)
 
-# --- Core typing/annotations ---
 from __future__ import annotations
+
+import os, glob, time, base64, hashlib, json, shutil, re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 
-# --- Stdlib ---
-import base64
-import glob
-import hashlib
-import json
-import os
-import re
-import shutil
-import time
-
-# --- Third-party ---
 import streamlit as st
 import pandas as pd
 
-# ---- Runtime hygiene (force CPU-friendly defaults) ----
+# ---- Runtime hygiene
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-# ---- LangChain / Vector (use maintained huggingface wrapper) ----
+# ---- LangChain / Vector
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings   # <- updated import (maintained path)
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import ConversationalRetrievalChain
@@ -41,37 +30,32 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-# ---- Document loaders (all optional; import-safe if missing backends) ----
+# Loaders
 from langchain_community.document_loaders import (
-    PyPDFLoader,
-    BSHTMLLoader,
-    Docx2txtLoader,
-    CSVLoader,
-    UnstructuredPowerPointLoader,
+    PyPDFLoader, BSHTMLLoader, Docx2txtLoader, CSVLoader, UnstructuredPowerPointLoader
 )
 
-# ---- Anthropic (Claude only; support both SDK entry points) ----
+# ---- Anthropic (Claude only)
 try:
-    from anthropic import Anthropic as _AnthropicClientNew  # >= v0.21
-except Exception:  # pragma: no cover
-    _AnthropicClientNew = None  # type: ignore[misc]
+    from anthropic import Anthropic as _AnthropicClientNew
+except Exception:
+    _AnthropicClientNew = None
 try:
-    from anthropic import Client as _AnthropicClientOld  # legacy
-except Exception:  # pragma: no cover
-    _AnthropicClientOld = None  # type: ignore[misc]
+    from anthropic import Client as _AnthropicClientOld
+except Exception:
+    _AnthropicClientOld = None
 
-# ---- Azure SDK (optional; used to pull KB down to ./KB) ----
+# ---- Azure SDK (used to pull KB down to ./KB)
 try:
     from azure.storage.blob import BlobServiceClient, ContainerClient
     try:
-        from azure.identity import DefaultAzureCredential  # optional; falls back to SAS/conn string
-    except Exception:  # pragma: no cover
-        DefaultAzureCredential = None  # type: ignore[assignment]
+        from azure.identity import DefaultAzureCredential
+    except Exception:
+        DefaultAzureCredential = None  # type: ignore
     _AZURE_OK = True
-except Exception:  # pragma: no cover
-    BlobServiceClient = ContainerClient = DefaultAzureCredential = None  # type: ignore[assignment]
+except Exception:
+    BlobServiceClient = ContainerClient = DefaultAzureCredential = None  # type: ignore
     _AZURE_OK = False
-
 
 # ---------------- Constants (hardcoded; no sidebar)
 DEFAULT_CLAUDE = "claude-sonnet-4-5"
@@ -240,7 +224,7 @@ def _azure_container_client() -> Optional["ContainerClient"]:
             return svc.get_container_client(cfg["container"])
         except Exception:
             return None
-    if cfg["account_url"]:
+    if cfg["account_url"] and DefaultAzureCredential is not None:
         try:
             cred = DefaultAzureCredential(exclude_interactive_browser_credential=True)
             svc = BlobServiceClient(account_url=cfg["account_url"], credential=cred)
@@ -394,17 +378,18 @@ class ChunkingConfig:
     chunk_size: int = 1200
     chunk_overlap: int = 200
 
-def _make_embeddings():
-    key = f"_emb_model_cache::{_EMB_MODEL}"
-    if key in st.session_state:
-        return st.session_state[key]
-    embeddings = HuggingFaceEmbeddings(
+@st.cache_resource(show_spinner=False)
+def _cached_embeddings() -> HuggingFaceEmbeddings:
+    # Lazy, cached (prevents slow startup/health-check failures)
+    return HuggingFaceEmbeddings(
         model_name=_EMB_MODEL,
         model_kwargs=_EMB_MODEL_KW,
         encode_kwargs=_ENCODE_KW,
     )
-    st.session_state[key] = embeddings
-    return embeddings
+
+def _make_embeddings():
+    # Keep a tiny wrapper for future toggles; returns cached instance
+    return _cached_embeddings()
 
 def _faiss_dir(persist_dir: str, collection_name: str) -> Path:
     return Path(persist_dir).expanduser().resolve() / collection_name
@@ -450,7 +435,7 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
         st.error(f"Failed to load FAISS index from disk. Error: {e}")
         return None
 
-# ---------------- Claude init (hardcoded model)
+# ---------------- Claude init (hardcoded model) — lazy, cached
 def _strip_proxy_env() -> None:
     for v in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"):
         os.environ.pop(v, None)
@@ -478,7 +463,8 @@ def _get_secret_api_key() -> Optional[str]:
             return v.strip()
     return None
 
-def _anthropic_client_from_secrets():
+@st.cache_resource(show_spinner=False)
+def _anthropic_client_from_secrets_cached():
     _strip_proxy_env()
     api_key = _get_secret_api_key()
     if not api_key:
@@ -491,7 +477,7 @@ def _anthropic_client_from_secrets():
     raise RuntimeError("Anthropic SDK not installed correctly.")
 
 def make_llm(model_name: str, temperature: float):
-    client = _anthropic_client_from_secrets()
+    client = _anthropic_client_from_secrets_cached()
     return ClaudeDirect(client=client, model=model_name or DEFAULT_CLAUDE,
                         temperature=temperature, max_tokens=800)
 
@@ -690,7 +676,7 @@ def main():
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
 
     # 3) Auto-index
-    st.markdown("### 💬 Chat with Forecast360")
+    st.markdown("### 💬 Chat with your Knowledge Base (RAG • Claude.ai)")
     hero_status = st.container()
     vs = auto_index_if_needed(status_placeholder=hero_status)
 
