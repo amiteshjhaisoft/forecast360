@@ -1,9 +1,9 @@
 # Author: Amitesh Jha | iSoft | 2025-10-12
-# deci_int.py — Compact popover RAG chat for Forecast360 (Claude & Azure OpenAI only)
-# - Syncs Knowledge Base (KB) from Azure Blob using KB/meta/version.json
+# deci_int.py — Compact popover RAG chat (Claude.ai & Azure OpenAI only)
+# - Syncs Knowledge Base (KB) from Azure Blob via KB/meta/version.json
 # - Builds/loads FAISS index from local ./KB
-# - Exposes render_chat_popover() to embed in forecast360.py
-# - No sidebar; minimal standalone main() kept for testing
+# - Exposes render_chat_popover() to embed in forecast360_app.py
+# - Default model: Claude Sonnet 4-5
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from typing import List, Tuple, Optional, Dict, Any
 import streamlit as st
 import pandas as pd
 
-# ---------- Runtime hygiene ----------
+# ---------------- Runtime hygiene ----------------
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-# ---------- LangChain / Vector store ----------
+# ---------------- LangChain / Vector store ----------------
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -46,9 +46,6 @@ try:
 except Exception:
     _AnthropicClientOld = None
 
-# Azure OpenAI (chat)
-from langchain_openai import AzureChatOpenAI
-
 # Optional Azure Blob SDK (handled gracefully if not installed)
 try:
     from azure.storage.blob import ContainerClient
@@ -56,8 +53,8 @@ try:
 except Exception:
     _AZURE_OK = False
 
-# ---------- Constants ----------
-DEFAULT_CLAUDE = "claude-3-5-sonnet-20240620"
+# ---------------- Constants ----------------
+DEFAULT_CLAUDE = "claude-sonnet-4-5"  # as requested
 _EMB_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _EMB_MODEL_KW = {"device": "cpu", "trust_remote_code": False}
 _ENCODE_KW = {"normalize_embeddings": True}
@@ -78,7 +75,7 @@ GREETING_RE = re.compile(
 
 VectorStoreType = FAISS
 
-# ---------- Minimal Claude wrapper ----------
+# ---------------- Minimal Claude wrapper ----------------
 class ClaudeDirect(BaseChatModel):
     model: str = DEFAULT_CLAUDE
     temperature: float = 0.2
@@ -118,12 +115,11 @@ class ClaudeDirect(BaseChatModel):
         ai = AIMessage(content=text)
         return ChatResult(generations=[ChatGeneration(message=ai)])
 
-# ---------- Theme / CSS ----------
-# Keep this here so the widget looks nice standalone too.
+# ---------------- Theme / CSS ----------------
 try:
     st.set_page_config(page_title="Forecast360 • Chat", page_icon="💬", layout="wide")
 except Exception:
-    pass  # Allow forecast360.py to set page_config first
+    pass  # allow outer app to set page config first
 
 def _first_existing(paths: list[Optional[Path]]) -> Optional[Path]:
     for p in paths:
@@ -174,7 +170,7 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- KB + Azure helpers ----------
+# ---------------- KB + Azure helpers ----------------
 def _local_kb_dir() -> Path:
     p = Path.cwd() / "KB"
     p.mkdir(parents=True, exist_ok=True)
@@ -202,7 +198,7 @@ def _azure_cfg() -> Dict[str, Any]:
         "sas_url":           az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL"),
     }
 
-def _azure_container_client() -> Optional[ContainerClient]:
+def _azure_container_client() -> Optional["ContainerClient"]:
     if not _AZURE_OK:
         return None
     cfg = _azure_cfg()
@@ -266,7 +262,7 @@ def sync_kb_from_azure_if_needed() -> Path:
 
     return dest
 
-# ---------- Small utils ----------
+# ---------------- Small utils ----------------
 def human_time(ms: float) -> str:
     return f"{ms:.0f} ms" if ms < 1000 else f"{ms/1000:.2f} s"
 
@@ -294,7 +290,7 @@ def compute_kb_signature(folder: str) -> Tuple[str, int]:
     raw = "\n".join(lines) + str(SUPPORTED_TEXT_DOCS)
     return stable_hash(raw if raw else f"EMPTY-{time.time()}"), len(files)
 
-# ---------- Loading ----------
+# ---------------- Loading ----------------
 def _fallback_read(path: str) -> str:
     try:
         if path.lower().endswith(tuple(SPREADSHEET_EXTS)):
@@ -353,7 +349,7 @@ def load_documents(folder: str) -> List[Document]:
         docs.extend(load_one(path))
     return docs
 
-# ---------- Indexing (FAISS) ----------
+# ---------------- Indexing (FAISS) ----------------
 @dataclass
 class ChunkingConfig:
     chunk_size: int = 1200
@@ -418,7 +414,7 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
         st.error(f"Failed to load FAISS index from disk. Error: {e}")
         return None
 
-# ---------- Anthropic / Azure OpenAI init ----------
+# ---------------- Anthropic / Azure OpenAI init ----------------
 def _strip_proxy_env() -> None:
     for v in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"):
         os.environ.pop(v, None)
@@ -460,7 +456,15 @@ def _anthropic_client_from_secrets():
     raise RuntimeError("Anthropic SDK not installed correctly.")
 
 def _azure_chat_llm(model_name: Optional[str], temperature: float):
-    # Requires: AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION, AZURE_OPENAI_CHAT_DEPLOYMENT(optional)
+    # Lazy import so the module doesn't crash if langchain_openai isn't installed
+    try:
+        from langchain_openai import AzureChatOpenAI  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Azure OpenAI selected, but 'langchain-openai' is not installed. "
+            "Add 'langchain-openai>=0.1.7' to requirements.txt."
+        ) from e
+
     return AzureChatOpenAI(
         azure_deployment=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or (model_name or "gpt-4o"),
         openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
@@ -484,7 +488,7 @@ def make_chain(vs: VectorStoreType, llm: BaseChatModel, k: int):
         llm=llm, retriever=retriever, memory=memory, return_source_documents=True, verbose=False
     )
 
-# ---------- Defaults + auto-index ----------
+# ---------------- Defaults + auto-index ----------------
 def settings_defaults() -> Dict[str, Any]:
     kb_dir = str(_local_kb_dir())
     return {
@@ -493,8 +497,8 @@ def settings_defaults() -> Dict[str, Any]:
         "base_folder": kb_dir,
         "emb_model": _EMB_MODEL,
         "chunk_cfg": ChunkingConfig(),
-        "backend": "Claude (Anthropic)",
-        "claude_model": DEFAULT_CLAUDE,
+        "backend": "Claude (Anthropic)",      # default provider
+        "claude_model": DEFAULT_CLAUDE,       # default model
         "azure_model": os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or "gpt-4o",
         "temperature": 0.2,
         "top_k": 5,
@@ -558,7 +562,7 @@ def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optiona
     except Exception:
         return None
 
-# ---------- UI helpers ----------
+# ---------------- UI helpers ----------------
 def _avatar_for_role(role: str) -> Optional[str]:
     if role == "user" and USER_AVATAR_PATH:
         return str(USER_AVATAR_PATH)
@@ -572,7 +576,7 @@ def render_chat_history():
         with st.chat_message(role, avatar=_avatar_for_role(role)):
             st.markdown(message["content"])
 
-# ---------- LLM & Chain ----------
+# ---------------- LLM & Chain ----------------
 def make_llm_and_chain(vs: VectorStoreType):
     backend = st.session_state["backend"]
     model_name = st.session_state["claude_model"] if backend.startswith("Claude") else st.session_state["azure_model"]
@@ -664,11 +668,11 @@ def handle_user_input(query: str, vs: Optional[VectorStoreType]):
     st.session_state["messages"].append({"role": "assistant", "content": msg})
     st.rerun()
 
-# ---------- Popover Chat (callable from forecast360.py) ----------
+# ---------------- Popover Chat (call from forecast360_app.py) ----------------
 def render_chat_popover():
     """
-    Renders a compact chat in a popover. Call this from forecast360.py after snapshot,
-    or render it always as a small launcher button.
+    Renders a compact chat in a popover. Call this from forecast360_app.py
+    anywhere in your layout.
     """
     # Ensure local KB mirrors Azure latest (no-op if already up-to-date)
     kb_dir = sync_kb_from_azure_if_needed()
@@ -680,17 +684,28 @@ def render_chat_popover():
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
     st.session_state.setdefault("messages", [{"role":"assistant","content":"Hi! Ask anything about your Knowledge Base."}])
 
+    # Detect whether langchain_openai is present for Azure OpenAI option
+    has_openai = False
+    try:
+        import importlib; importlib.import_module("langchain_openai")
+        has_openai = True
+    except Exception:
+        has_openai = False
+
     with st.popover("💬 Ask Forecast360", use_container_width=False):
         st.caption("Uses the latest Knowledge Base snapshot")
 
-        # Minimal controls
-        st.session_state["backend"] = st.segmented_control(
-            "Model", options=["Claude (Anthropic)", "Azure OpenAI"], default=st.session_state["backend"]
-        )
+        # Provider toggle — default Claude Sonnet 4-5
+        options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
+        default_idx = 0  # Claude by default
+        st.session_state["backend"] = st.segmented_control("Model", options=options, index=default_idx)
+
         if st.session_state["backend"].startswith("Claude"):
-            st.session_state["claude_model"] = st.text_input("Claude model", value=st.session_state["claude_model"])
+            st.session_state["claude_model"] = st.text_input("Claude model", value=st.session_state.get("claude_model", DEFAULT_CLAUDE))
         else:
-            st.session_state["azure_model"] = st.text_input("Azure OpenAI deployment", value=st.session_state["azure_model"])
+            st.session_state["azure_model"] = st.text_input("Azure OpenAI deployment", value=st.session_state.get("azure_model", "gpt-4o"))
+            if not has_openai:
+                st.warning("Install `langchain-openai>=0.1.7` to enable Azure OpenAI.")
 
         st.session_state["temperature"] = st.slider("Temperature", 0.0, 1.0, st.session_state["temperature"], 0.05)
         st.session_state["top_k"] = st.slider("Top-K", 1, 15, st.session_state["top_k"])
@@ -705,9 +720,9 @@ def render_chat_popover():
         if q:
             handle_user_input(q.strip(), vs)
 
-# ---------- Minimal standalone main (no sidebar) ----------
+# ---------------- Minimal standalone main (no sidebar) ----------------
 def main():
-    # Bring defaults and sync KB on load
+    # Defaults + KB sync on load
     for k, v in settings_defaults().items():
         st.session_state.setdefault(k, v)
     kb_dir = sync_kb_from_azure_if_needed()
