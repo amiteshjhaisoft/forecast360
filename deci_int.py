@@ -3,7 +3,7 @@
 # - Syncs Knowledge Base (KB) from Azure Blob via KB/meta/version.json
 # - Builds/loads FAISS index from local ./KB
 # - Exposes render_chat_popover() to embed in forecast360_app.py
-# - Default model: Claude Sonnet 4-5
+# - Default model: Claude Sonnet 4-5 (no extra settings in UI)
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ except Exception:
     _AZURE_OK = False
 
 # ---------------- Constants ----------------
-DEFAULT_CLAUDE = "claude-sonnet-4-5"  # as requested
+DEFAULT_CLAUDE = "claude-sonnet-4-5"
 _EMB_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _EMB_MODEL_KW = {"device": "cpu", "trust_remote_code": False}
 _ENCODE_KW = {"normalize_embeddings": True}
@@ -167,6 +167,9 @@ st.markdown(f"""
 .msg.user .bubble{{ background:var(--bubble-user); }}
 .composer{{ padding:.6rem .75rem; border-top:1px solid var(--border); background:#fff; position:sticky; bottom:0; z-index:2; }}
 .status-inline{{ width:100%; border:1px solid var(--border); background:#fafcff; border-radius:10px; padding:.5rem .7rem; font-size:.9rem; color:#111827; margin:.5rem 0 .8rem; }}
+.di-row{{ display:flex; align-items:center; gap:.5rem; }}
+.di-note{{ color:#55627a; font-size:.85rem; margin-top:.25rem; }}
+.di-btn{{ border:1px solid var(--border); background:#f8fafc; padding:.25rem .55rem; border-radius:8px; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -211,7 +214,6 @@ def _azure_container_client() -> Optional["ContainerClient"]:
     return None
 
 def _azure_kb_version() -> Optional[str]:
-    """Read KB/meta/version.json from Azure (light request)."""
     try:
         cli = _azure_container_client()
         if not cli:
@@ -224,10 +226,7 @@ def _azure_kb_version() -> Optional[str]:
         return None
 
 def sync_kb_from_azure_if_needed() -> Path:
-    """
-    If Azure has a different KB version, download prefix to local ./KB.
-    Fast path: do nothing when versions match or SDK missing.
-    """
+    """If Azure has a different KB version, download prefix to local ./KB."""
     if not _AZURE_OK:
         return _local_kb_dir()
 
@@ -244,14 +243,12 @@ def sync_kb_from_azure_if_needed() -> Path:
     pref = cfg["prefix"].rstrip("/") + "/"
     dest = _local_kb_dir()
 
-    # wipe local KB to avoid stale files
     try:
         shutil.rmtree(dest, ignore_errors=True)
     except Exception:
         pass
     dest.mkdir(parents=True, exist_ok=True)
 
-    # download every blob under prefix, preserving structure
     for blob in cli.list_blobs(name_starts_with=pref):
         rel = blob.name[len(pref):]
         target = dest / rel
@@ -314,8 +311,7 @@ def load_one(path: str) -> List[Document]:
     if p.endswith(tuple(IMAGE_EXTS | AUDIO_EXTS | VIDEO_EXTS)):
         doc_type = "Image" if p.endswith(tuple(IMAGE_EXTS)) else ("Audio" if p.endswith(tuple(AUDIO_EXTS)) else "Video")
         placeholder_content = (
-            f"This document is a {doc_type} file. "
-            f"Text content unavailable (requires OCR/transcription). "
+            f"This document is a {doc_type} file. Text content unavailable (requires OCR/transcription). "
             f"Metadata: {Path(path).name}."
         )
         return [Document(page_content=placeholder_content, metadata={"source": path, "type": doc_type, "status": "placeholder"})]
@@ -390,7 +386,6 @@ def _make_embeddings():
     st.session_state[key] = embeddings
     return embeddings
 
-
 def _faiss_dir(persist_dir: str, collection_name: str) -> Path:
     return Path(persist_dir).expanduser().resolve() / collection_name
 
@@ -410,7 +405,6 @@ def index_folder_langchain(folder: str, persist_dir: str, collection_name: str,
     )
     splat = splitter.split_documents(raw_docs)
     embeddings = _make_embeddings()
-
     faiss_db = FAISS.from_documents(documents=splat, embedding=embeddings)
 
     faiss_dir.mkdir(parents=True, exist_ok=True)
@@ -422,7 +416,7 @@ def get_vectorstore(persist_dir: str, collection_name: str, emb_model: str) -> O
     if key in st.session_state:
         return st.session_state[key]
 
-    faiss_path = _faiss_dir(persist_dir, collection_name)
+    faiss_path = _faiss_dir(persist_dir, colname=collection_name)
     if not faiss_path.exists():
         return None
 
@@ -480,9 +474,8 @@ def _anthropic_client_from_secrets():
     raise RuntimeError("Anthropic SDK not installed correctly.")
 
 def _azure_chat_llm(model_name: Optional[str], temperature: float):
-    # Lazy import so the module doesn't crash if langchain_openai isn't installed
     try:
-        from langchain_openai import AzureChatOpenAI  # type: ignore
+        from langchain_openai import AzureChatOpenAI  # lazy import
     except Exception as e:
         raise RuntimeError(
             "Azure OpenAI selected, but 'langchain-openai' is not installed. "
@@ -502,7 +495,6 @@ def make_llm(backend: str, model_name: str, temperature: float):
         client = _anthropic_client_from_secrets()
         return ClaudeDirect(client=client, model=model_name or DEFAULT_CLAUDE,
                             temperature=temperature, max_tokens=800)
-    # Azure OpenAI
     return _azure_chat_llm(model_name, temperature)
 
 def make_chain(vs: VectorStoreType, llm: BaseChatModel, k: int):
@@ -521,12 +513,14 @@ def settings_defaults() -> Dict[str, Any]:
         "base_folder": kb_dir,
         "emb_model": _EMB_MODEL,
         "chunk_cfg": ChunkingConfig(),
-        "backend": "Claude (Anthropic)",      # default provider
-        "claude_model": DEFAULT_CLAUDE,       # default model
+        "backend": "Claude (Anthropic)",
+        "claude_model": DEFAULT_CLAUDE,
         "azure_model": os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or "gpt-4o",
         "temperature": 0.2,
         "top_k": 5,
         "auto_index_min_interval_sec": 8,
+        # UI prefs
+        "di_chat_height": 420,   # default popover chat height
     }
 
 def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optional[VectorStoreType]:
@@ -695,20 +689,19 @@ def handle_user_input(query: str, vs: Optional[VectorStoreType]):
 # ---------------- Popover Chat (call from forecast360_app.py) ----------------
 def render_chat_popover():
     """
-    Renders a compact chat in a popover. Call this from forecast360_app.py
-    anywhere in your layout.
+    Renders a compact, professional chat popover.
+    - Provider selection via dropdown (Claude default).
+    - Size controls: Small / Medium / Large + quick ± buttons (height only).
     """
-    # Ensure local KB mirrors Azure latest (no-op if already up-to-date)
     kb_dir = sync_kb_from_azure_if_needed()
 
-    # Defaults
     for k, v in settings_defaults().items():
         st.session_state.setdefault(k, v)
     st.session_state["base_folder"] = str(kb_dir)
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
     st.session_state.setdefault("messages", [{"role":"assistant","content":"Hi! Ask anything about your Knowledge Base."}])
 
-    # Detect whether langchain_openai is present for Azure OpenAI option
+    # Detect Azure OpenAI availability
     has_openai = False
     try:
         import importlib; importlib.import_module("langchain_openai")
@@ -717,44 +710,61 @@ def render_chat_popover():
         has_openai = False
 
     with st.popover("💬 Ask Forecast360", use_container_width=False):
+        # Top controls row
         st.caption("Uses the latest Knowledge Base snapshot")
+        c1, c2, c3 = st.columns([1.2, 0.9, 0.9])
 
-        # Provider toggle — default Claude Sonnet 4-5
-        # options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
-        # default_idx = 0  # Claude by default
-        # st.session_state["backend"] = st.segmented_control("Model", options=options, index=default_idx)
-
+        # Provider dropdown (Claude default)
         options = ["Claude (Anthropic)"] + (["Azure OpenAI"] if has_openai else [])
-        # Use the option value for default (Claude by default)
-        current = st.session_state.get("backend", "Claude (Anthropic)")
-        if current not in options:
-            current = "Claude (Anthropic)"
-        st.session_state["backend"] = st.segmented_control("Model", options=options, default=current)
+        default_idx = options.index(st.session_state.get("backend", "Claude (Anthropic)")) if st.session_state.get("backend", "Claude (Anthropic)") in options else 0
+        with c1:
+            choice = st.selectbox("Model", options=options, index=default_idx, label_visibility="visible")
+        backend = str(choice or "Claude (Anthropic)")
+        if backend == "Azure OpenAI" and not has_openai:
+            st.warning("Install `langchain-openai>=0.1.7` to enable Azure OpenAI. Falling back to Claude.", icon="⚠️")
+            backend = "Claude (Anthropic)"
+        st.session_state["backend"] = backend
+        # Keep fixed default models (hidden from UI)
+        st.session_state.setdefault("claude_model", DEFAULT_CLAUDE)
+        st.session_state.setdefault("azure_model", os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or "gpt-4o")
 
-        
-        if st.session_state["backend"].startswith("Claude"):
-            st.session_state["claude_model"] = st.text_input("Claude model", value=st.session_state.get("claude_model", DEFAULT_CLAUDE))
-        else:
-            st.session_state["azure_model"] = st.text_input("Azure OpenAI deployment", value=st.session_state.get("azure_model", "gpt-4o"))
-            if not has_openai:
-                st.warning("Install `langchain-openai>=0.1.7` to enable Azure OpenAI.")
+        # Size controls
+        size_map = {"Small": 300, "Medium": 420, "Large": 600}
+        current_h = int(st.session_state.get("di_chat_height", 420))
+        # infer current label
+        inv_map = {v: k for k, v in size_map.items()}
+        current_label = inv_map.get(current_h, "Medium")
 
-        st.session_state["temperature"] = st.slider("Temperature", 0.0, 1.0, st.session_state["temperature"], 0.05)
-        st.session_state["top_k"] = st.slider("Top-K", 1, 15, st.session_state["top_k"])
+        with c2:
+            sel = st.selectbox("Size", options=list(size_map.keys()),
+                               index=["Small","Medium","Large"].index(current_label),
+                               label_visibility="visible")
+            st.session_state["di_chat_height"] = size_map[sel]
 
+        with c3:
+            st.write("")  # spacing
+            bcol1, bcol2, _ = st.columns([1,1,2])
+            if bcol1.button("−", use_container_width=True):
+                st.session_state["di_chat_height"] = max(240, int(st.session_state["di_chat_height"]) - 60)
+            if bcol2.button("+", use_container_width=True):
+                st.session_state["di_chat_height"] = min(900, int(st.session_state["di_chat_height"]) + 60)
+
+        # Status + index refresh (silent/professional)
         status = st.empty()
         vs = auto_index_if_needed(status_placeholder=status)
 
-        box = st.container(height=420, border=True)
-        render_chat_history()
+        # Chat box
+        box = st.container(height=int(st.session_state["di_chat_height"]), border=True)
+        with box:
+            render_chat_history()
 
+        # Composer
         q = st.chat_input("Ask about the current snapshot…")
         if q:
             handle_user_input(q.strip(), vs)
 
-# ---------------- Minimal standalone main (no sidebar) ----------------
+# ---------------- Minimal standalone main (for testing) ----------------
 def main():
-    # Defaults + KB sync on load
     for k, v in settings_defaults().items():
         st.session_state.setdefault(k, v)
     kb_dir = sync_kb_from_azure_if_needed()
@@ -769,12 +779,11 @@ def main():
     st.markdown('<div class="chat-card">', unsafe_allow_html=True)
     st.markdown('<div class="chat-scroll">', unsafe_allow_html=True)
     render_chat_history()
-    st.markdown("</div>", unsafe_allow_html=True)  # End chat-scroll
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="composer">', unsafe_allow_html=True)
     user_text = st.chat_input("Type your question...", key="user_prompt_input")
-    st.markdown("</div>", unsafe_allow_html=True)  # End composer
-    st.markdown("</div>", unsafe_allow_html=True)  # End chat-card
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     if user_text and user_text.strip():
         handle_user_input(user_text.strip(), vs)
