@@ -22,12 +22,13 @@ beautifulsoup4>=4.12       # BSHTMLLoader
 lxml>=4.9                  # parser for bs4
 docx2txt>=0.8              # Docx2txtLoader
 openpyxl                   # .xlsx
-xlrd==2.0.1                # legacy .xls
-unstructured>=0.15         # UnstructuredPowerPointLoader
-python-pptx>=0.6.23        # PPTX parsing for unstructured
-# optional but helpful for unstructured:
-python-magic               # requires OS libmagic
-
+xlrd==1.2.0                # legacy .xls (supports .xls in this version)
+# If you truly need .xlsb: pyxlsb
+# If you need ODS: odfpy
+# unstructured is powerful but heavy (system deps); leave commented unless needed:
+# unstructured[all-docs]>=0.15
+python-pptx>=0.6.23        # PPTX parsing (used by unstructured too)
+python-magic               # requires libmagic (on Windows use python-magic-bin)
 PyYAML
 
 # ---------- Classic ML / Stats ----------
@@ -36,17 +37,17 @@ statsmodels
 scipy
 
 # ---------- LangChain / Vector ----------
-langchain-core
-langchain-community
-langchain-text-splitters
-langchain-anthropic
-langgraph
+langchain-core>=0.2
+langchain-community>=0.2
+langchain-text-splitters>=0.2
+langchain-anthropic>=0.2
+langgraph>=0.2
 faiss-cpu>=1.8
-sentence-transformers>=3.0
+sentence-transformers>=3.0  # pulls torch; keep if you use local HF embeddings
 
 # ---------- Model SDKs ----------
 anthropic>=0.34
-langchain-openai>=0.1.7
+langchain-openai>=0.2.0     # <-- bump to align with LC split packages
 openai>=1.52.0
 
 # ---------- Azure Blob Storage ----------
@@ -54,10 +55,11 @@ azure-storage-blob>=12.22.0
 azure-identity>=1.17.1
 
 # ---------- Optional (app models/features) ----------
+# These are heavy; keep only if you use them in production:
 pmdarima
-prophet
+prophet                    # pulls cmdstanpy; needs a compiler toolchain
 tbats
 xgboost
 lightgbm
-darts
+darts                      # pulls torch & co.
 langsmith
