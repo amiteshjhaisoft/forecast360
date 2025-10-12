@@ -120,7 +120,7 @@ from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
 
 # DI chat popover
-from deci_int import render_chat_popover
+# from deci_int import render_chat_popover
 
 
 
