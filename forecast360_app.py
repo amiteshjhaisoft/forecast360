@@ -129,12 +129,16 @@ if "kb" not in st.session_state:
     st.session_state.kb = KBCapture(folder_name="KB").patch()  # <- no keep_last
 kb = st.session_state.kb
 
-# ======================= Unified, meaningful tooltips (Forecast360) =======================
-# Add this block once after `st.set_page_config(...)` (or after `import streamlit as st`).
+# ======================= Forecast360 — Unified Tooltips (widgets + content) =======================
+# Paste once after st.set_page_config(...) or right after `import streamlit as st`
 
-from typing import Any, Callable, Dict
+import html
+import streamlit as st
+from typing import Any, Callable, Dict, Optional
 
-# 1) Exact label -> tooltip (aligned to labels used in this app)
+# ------------------------------- 1) WIDGET TOOLTIP PATCH ---------------------------------
+
+# Exact label -> tooltip (aligned to labels used in this app)
 _TOOLTIP_MAP: Dict[str, str] = {
     # Upload & parsing
     "Upload CSV / Excel / JSON / Parquet / XML":
@@ -190,7 +194,7 @@ _TOOLTIP_MAP: Dict[str, str] = {
     "Metrics":
         "Primary/secondary error metrics to evaluate models.",
 
-    # Models (selectors in your sidebar)
+    # Models (selectors)
     "ARMA": "Autoregressive Moving Average (non-differenced).",
     "ARIMA": "ARIMA(p,d,q) with differencing (univariate).",
     "ARIMAX": "ARIMA with exogenous regressors.",
@@ -223,6 +227,7 @@ _TOOLTIP_MAP: Dict[str, str] = {
     "m (SARIMAX)": "Seasonal period (m).",
     "seasonal_periods (JSON list)":
         "TBATS seasonal periods, e.g., [7, 365.25].",
+
     # XGB / LGBM knobs
     "n_estimators": "Number of boosting trees.",
     "max_depth": "Maximum tree depth (complexity).",
@@ -239,7 +244,7 @@ _TOOLTIP_MAP: Dict[str, str] = {
     "lambda_l2": "L2 regularization (LightGBM).",
     "min_data_in_leaf": "Minimum samples per leaf.",
 
-    # Profile / viz (matches your Getting Started page)
+    # Profile / viz
     "Preview rows": "How many rows to preview (max 25).",
     "Numeric": "Numeric column for the boxplot.",
     "Category": "Categorical column used to group values.",
@@ -249,7 +254,6 @@ _TOOLTIP_MAP: Dict[str, str] = {
     "Columns (optional subset)": "Limit correlation to selected numeric columns.",
 }
 
-# 2) Heuristics so custom labels still get helpful tooltips
 def _infer_tooltip(label: Any) -> str:
     if not label:
         return "Hover for guidance on how this input affects the analysis."
@@ -257,8 +261,6 @@ def _infer_tooltip(label: Any) -> str:
     if lab in _TOOLTIP_MAP:
         return _TOOLTIP_MAP[lab]
     l = lab.lower()
-
-    # Light heuristics (safe defaults)
     if "xpath" in l:
         return "XPath to each repeated record node (e.g., .//row, .//record, .//item)."
     if any(k in l for k in ("date", "time", "timestamp")):
@@ -283,7 +285,6 @@ def _infer_tooltip(label: Any) -> str:
         return "Pick a matplotlib palette for category colors."
     return "Hover for guidance on how this input affects the analysis."
 
-# 3) Wrapper to inject `help=` only if missing
 def _with_default_help(fn: Callable[..., Any]) -> Callable[..., Any]:
     def wrapped(label: Any, *args: Any, **kwargs: Any) -> Any:
         if not kwargs.get("help"):
@@ -291,8 +292,8 @@ def _with_default_help(fn: Callable[..., Any]) -> Callable[..., Any]:
         return fn(label, *args, **kwargs)
     return wrapped
 
-# 4) Patch common Streamlit input widgets (single pass, idempotent)
 def install_unified_tooltips() -> None:
+    """Patch common Streamlit inputs with default help= tooltips (idempotent)."""
     if getattr(st.session_state, "_tooltips_patched", False):
         return
     for _name in (
@@ -304,9 +305,102 @@ def install_unified_tooltips() -> None:
             setattr(st, _name, _with_default_help(getattr(st, _name)))
     st.session_state["_tooltips_patched"] = True
 
-# Call once (safe if re-run)
-install_unified_tooltips()
-# =================== end unified tooltips (Forecast360) ====================
+# ------------------------------- 2) CONTENT TOOLTIP PATCH ---------------------------------
+
+# Map for Getting Started / content sections
+_CONTENT_TOOLTIP_MAP: Dict[str, str] = {
+    "Getting Started": "Quick steps to ingest data, profile it, and run forecasts.",
+    "Upload Data": "Load CSV/Excel/JSON/Parquet/XML to begin analysis.",
+    "Data Preview": "A quick look at your dataset to confirm parsing and columns.",
+    "Profiling": "Basic stats, missingness, and distributions.",
+    "Visualization": "Exploratory plots to spot trends, seasonality, and outliers.",
+    "Exogenous Features": "Optional drivers (calendar/features) to enrich models.",
+    "Backtesting": "Rolling-origin evaluation to estimate real forecast accuracy.",
+    "Models": "Choose and configure models to compare performance.",
+    "Forecasts": "Generate predictions with confidence intervals.",
+    "Knowledge Base": "Captures artifacts (tables/figs/html) into the KB folder.",
+}
+
+def _infer_content_tooltip(text: Any) -> str:
+    if not text:
+        return "Section description and usage tips."
+    s = str(text).strip()
+    if s in _CONTENT_TOOLTIP_MAP:
+        return _CONTENT_TOOLTIP_MAP[s]
+    l = s.lower()
+    if any(k in l for k in ("upload", "ingest", "load")):
+        return "Provide a supported file to begin (CSV/Excel/JSON/Parquet/XML)."
+    if any(k in l for k in ("preview", "sample", "head")):
+        return "Preview your data to verify parsing and column types."
+    if any(k in l for k in ("profile", "profiling", "summary", "describe")):
+        return "Data profile: types, missingness, basic stats, and distributions."
+    if any(k in l for k in ("visual", "chart", "plot", "graph", "heatmap")):
+        return "Exploratory visualizations to spot trends and outliers."
+    if any(k in l for k in ("exog", "feature", "driver", "covariate")):
+        return "Optional driver variables aligned to your time index; can be lagged."
+    if any(k in l for k in ("backtest", "cv", "fold", "validation", "holdout")):
+        return "Rolling-origin evaluation to estimate out-of-sample accuracy."
+    if any(k in l for k in ("model", "arima", "prophet", "xgboost", "lightgbm", "tft", "sarima")):
+        return "Model selection/tuning for your time series forecasting."
+    if any(k in l for k in ("forecast", "prediction", "horizon", "interval")):
+        return "Generate future values with uncertainty bounds."
+    if any(k in l for k in ("knowledge base", "kb", "snapshot")):
+        return "Persist artifacts into the Knowledge Base for RAG/DI."
+    return "Section description and usage tips."
+
+def _esc(x: Any) -> str:
+    return html.escape(str(x), quote=True)
+
+def _patch_heading_api() -> None:
+    """Monkey-patch title/header/subheader to render with native browser tooltip (idempotent)."""
+    if getattr(st.session_state, "_content_tooltips_headings_patched", False):
+        return
+
+    def _mk_heading_wrapper(tag: str) -> Callable[..., Any]:
+        def _wrapped(body: Any, *args, **kwargs) -> None:
+            tooltip: Optional[str] = kwargs.pop("tooltip", None)
+            tip = tooltip or _infer_content_tooltip(body)
+            st.markdown(
+                f'<{tag} class="f360-heading" title="{_esc(tip)}">{_esc(body)}</{tag}>',
+                unsafe_allow_html=True,
+            )
+        return _wrapped
+
+    # Patch headings
+    st.title     = _mk_heading_wrapper("h1")   # type: ignore[assignment]
+    st.header    = _mk_heading_wrapper("h2")   # type: ignore[assignment]
+    st.subheader = _mk_heading_wrapper("h3")   # type: ignore[assignment]
+
+    # Subtle CSS hint for hover
+    st.markdown(
+        """
+        <style>
+          .f360-heading[title] { cursor: help; }
+          .f360-md-tip { display:inline-block; margin-left:.35rem; cursor:help; user-select:none; }
+          .f360-md-tip:hover { opacity:.85; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state["_content_tooltips_headings_patched"] = True
+
+def md(markdown_text: str, tooltip: Optional[str] = None, **st_markdown_kwargs: Any) -> None:
+    """
+    Render markdown plus an inline info glyph `ⓘ` that shows a tooltip on hover.
+    Usage: md("**Step 1:** Upload Data", tooltip="Supported: CSV/Excel/JSON/Parquet/XML.")
+    """
+    st.markdown(markdown_text, **st_markdown_kwargs)
+    tip = tooltip or _infer_content_tooltip(markdown_text)
+    st.markdown(f'<span class="f360-md-tip" title="{_esc(tip)}">ⓘ</span>', unsafe_allow_html=True)
+
+def install_content_tooltips() -> None:
+    _patch_heading_api()
+
+# ------------------------------- 3) INSTALL BOTH PATCHES ---------------------------------
+install_unified_tooltips()     # widget tooltips
+install_content_tooltips()     # title/header/subheader + md() helper
+# ======================= /end Forecast360 — Unified Tooltips =======================
+
 
 
 def render_kb_footer():
