@@ -194,7 +194,7 @@ st.markdown(f"""
 .msg.user .bubble{{ background:var(--bubble-user); }}
 .status-inline{{ width:100%; border:1px solid var(--border); background:#fafcff; border-radius:10px;
                 padding:.5rem .7rem; font-size:.9rem; color:#111827; margin:.5rem 0 .8rem; }}
-.small-note{opacity:.85;font-size:.85rem}
+.small-note{{opacity:.85;font-size:.85rem}}
 </style>
 """, unsafe_allow_html=True)
 
