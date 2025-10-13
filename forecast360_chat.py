@@ -797,26 +797,28 @@ def main():
     st.markdown("### 💬 Chat with Forecast360")
     st.markdown(f"<div class='status-inline'><b>KB Sync:</b> {sync_label}</div>", unsafe_allow_html=True)
 
-    c1, c2, c3, c4 = st.columns([1,1,1,2], vertical_alignment="center")
+    c1, c2, c3 = st.columns([1,2,1], vertical_alignment="center")
     with c1:
-        st.session_state["chat_height"] = st.number_input("Chat height (px)", 420, 1200, st.session_state.get("chat_height", 560), step=20)
+        hero_status = st.container()
+        vs = auto_index_if_needed(status_placeholder=hero_status)
     with c2:
         if st.button("Reindex KB", use_container_width=True):
             # Force reindex by clearing signature and last-time
             st.session_state.pop("_kb_last_sig", None)
             st.session_state["_kb_last_index_ts"] = 0
     with c3:
-        st.caption("Use /set top_k=8 temperature=0.1 or /read <file-stem>")
-    with c4:
-        counts = st.session_state.get("_kb_last_counts", {})
-        st.markdown(
-            f"<div class='small-note'>Files: <b>{counts.get('files','–')}</b> · Docs: <b>{counts.get('docs','–')}</b> · Chunks: <b>{counts.get('chunks','–')}</b></div>",
-            unsafe_allow_html=True,
-        )
+        st.session_state["chat_height"] = st.number_input("Chat height (px)", 420, 1200, st.session_state.get("chat_height", 560), step=20)
+        
+    # with c4:
+    #     counts = st.session_state.get("_kb_last_counts", {})
+    #     st.markdown(
+    #         f"<div class='small-note'>Files: <b>{counts.get('files','–')}</b> · Docs: <b>{counts.get('docs','–')}</b> · Chunks: <b>{counts.get('chunks','–')}</b></div>",
+    #         unsafe_allow_html=True,
+    #     )
 
     # 4) Auto-index
-    hero_status = st.container()
-    vs = auto_index_if_needed(status_placeholder=hero_status)
+    # hero_status = st.container()
+    # vs = auto_index_if_needed(status_placeholder=hero_status)
 
     # 5) Chat UI (no sidebar)
     st.session_state.setdefault("messages", [{"role": "assistant", "content": "Hi! Ask me anything about Forecast360."}])
@@ -824,7 +826,7 @@ def main():
     chat_area = st.container(height=int(st.session_state.get("chat_height", 560)), border=False)
     with chat_area:
         render_chat_history()
-    user_text = st.chat_input("Type your question…  (try: /set top_k=8 or read project plan)")
+    user_text = st.chat_input("Type your question… ")
     st.markdown("</div>", unsafe_allow_html=True)
 
     if user_text and user_text.strip():
