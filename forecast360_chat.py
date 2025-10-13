@@ -637,15 +637,13 @@ def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optiona
         return None
 
 # ---------------- UI helpers
-
 def _avatar_for_role(role: str) -> Optional[str]:
     # Prefer data URIs (work in Streamlit avatars); fall back to local path, then emoji
     if role == "user":
         return USER_AVATAR_URI or (str(USER_AVATAR_PATH) if USER_AVATAR_PATH else "👤")
     if role == "assistant":
-        return ASSISTANT_AVATAR_URI or (str(ASSISTANT_AVATAR_PATH) if ASSISTANT_AVATAR_PATH else "🤖")
+        return ASSIST_AVATAR_URI or (str(ASSIST_AVATAR_PATH) if ASSIST_AVATAR_PATH else "🤖")
     return None
-
 
 def render_chat_history():
     for message in st.session_state.get("messages", []):
