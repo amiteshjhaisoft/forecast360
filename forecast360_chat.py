@@ -815,7 +815,7 @@ def main():
     vs = auto_index_if_needed(status_placeholder=hero_status)
 
     # 5) Chat UI (no sidebar)
-    st.session_state.setdefault("messages", [{"role": "assistant", "content": "Hi! Ask anything about your Knowledge Base."}])
+    st.session_state.setdefault("messages", [{"role": "assistant", "content": "Hi! Ask anything about Forecast360."}])
     st.markdown('<div class="chat-card">', unsafe_allow_html=True)
     chat_area = st.container(height=int(st.session_state.get("chat_height", 560)), border=False)
     with chat_area:
