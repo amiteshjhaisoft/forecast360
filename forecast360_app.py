@@ -129,6 +129,184 @@ if "kb" not in st.session_state:
     st.session_state.kb = KBCapture(folder_name="KB").patch()  # <- no keep_last
 kb = st.session_state.kb
 
+# ======================= Unified, meaningful tooltips (Forecast360) =======================
+# Add this block once after `st.set_page_config(...)` (or after `import streamlit as st`).
+
+from typing import Any, Callable, Dict
+
+# 1) Exact label -> tooltip (aligned to labels used in this app)
+_TOOLTIP_MAP: Dict[str, str] = {
+    # Upload & parsing
+    "Upload CSV / Excel / JSON / Parquet / XML":
+        "Upload a single data file. Supported: CSV, Excel, JSON, Parquet, XML.",
+    "XML row path (optional XPath)":
+        "XPath pointing at each repeated record node. Examples: .//row, .//record, or .//item.",
+    "Date/Time column (auto-detected)":
+        "The timestamp column used to order/index your time series.",
+    "Target column (numeric, auto-detected)":
+        "Numeric measure to analyse and forecast (e.g., Sales, Demand).",
+
+    # Resampling & missing data
+    "Resample frequency":
+        "Resample by SUM to D/W/M/Q; choose 'raw' to keep original granularity.",
+    "Missing values":
+        "How to handle gaps after resampling or in raw data.",
+    "Constant value (for missing)":
+        "Used only when Missing values = constant. Fills all gaps with this number.",
+
+    # Exogenous features
+    "🧩 Exogenous features (for ARIMAX/SARIMAX/Auto_ARIMA/Tree/TFT)":
+        "Optional driver variables (calendar features, chosen columns, and lags).",
+    "Use calendar features (dow, month, month-start/end, weekend)":
+        "Adds calendar features aligned to the series index.",
+    "Exog columns by name (comma or JSON list)":
+        "Driver columns from your dataset (e.g., price, promo). Use comma or JSON list.",
+    "Scale exog":
+        "Standardize exogenous features (mean 0, std 1) for stability.",
+    "Exog lags":
+        "Create lagged versions of exogenous features (0 keeps contemporaneous).",
+    "Additional numeric exogenous columns (optional)":
+        "Pick extra numeric columns to include as drivers.",
+
+    # Pattern, transforms, outliers
+    "Additive vs Multiplicative pattern":
+        "Multiplicative if variability rises with the level; otherwise additive.",
+    "Seasonal period (m)":
+        "Seasonal cycle length: 'auto' or explicit (e.g., 7, 12, 24, 52, 365).",
+    "Target transform":
+        "Variance-stabilizing transform (log1p/Box–Cox); reversed for outputs.",
+    "Winsorize outliers":
+        "Clip extremes to reduce outlier impact.",
+    "Outlier z-threshold (z)":
+        "Higher z keeps more extremes (e.g., 3.5 = fairly tolerant).",
+
+    # CV / holdout
+    "Folds":
+        "Number of rolling-origin folds for backtesting.",
+    "Horizon (H)":
+        "Forecast steps per fold (evaluation window).",
+    "Gap":
+        "Gap between train end and test start to reduce leakage.",
+    "Metrics":
+        "Primary/secondary error metrics to evaluate models.",
+
+    # Models (selectors in your sidebar)
+    "ARMA": "Autoregressive Moving Average (non-differenced).",
+    "ARIMA": "ARIMA(p,d,q) with differencing (univariate).",
+    "ARIMAX": "ARIMA with exogenous regressors.",
+    "SARIMA": "Seasonal ARIMA with seasonal orders (univariate).",
+    "SARIMAX": "Seasonal ARIMA with exogenous regressors.",
+    "Auto_ARIMA": "Auto-selects ARIMA/SARIMA orders.",
+    "HWES": "Exponential smoothing (trend/seasonal).",
+    "Prophet": "Additive model with trend/seasonality/holidays.",
+    "TBATS": "Multiple/long seasonalities.",
+    "XGBoost": "Gradient-boosted trees with lag/covariates.",
+    "LightGBM": "LightGBM regressor with lag/covariates.",
+    "TFT": "Temporal Fusion Transformer (via Darts).",
+
+    # Per-model knobs
+    "p (ARMA)": "AR order (autoregressive terms).",
+    "q (ARMA)": "MA order (moving-average terms).",
+    "trend (ARMA)": "Deterministic trend: n=None, c=const, t=trend, ct=both.",
+    "p (ARIMA)": "AR order.",
+    "d (ARIMA)": "Differencing order.",
+    "q (ARIMA)": "MA order.",
+    "trend (ARIMA)": "Deterministic trend for ARIMA.",
+    "p": "Non-seasonal AR order.",
+    "d": "Non-seasonal differencing.",
+    "q": "Non-seasonal MA order.",
+    "P": "Seasonal AR order.",
+    "D": "Seasonal differencing.",
+    "Q": "Seasonal MA order.",
+    "m (SARIMA)": "Seasonal period (m). 'auto' uses detected/chosen m.",
+    "trend": "Deterministic trend component.",
+    "m (SARIMAX)": "Seasonal period (m).",
+    "seasonal_periods (JSON list)":
+        "TBATS seasonal periods, e.g., [7, 365.25].",
+    # XGB / LGBM knobs
+    "n_estimators": "Number of boosting trees.",
+    "max_depth": "Maximum tree depth (complexity).",
+    "learning_rate": "Shrinkage rate; lower is safer but needs more trees.",
+    "subsample": "Row sampling fraction per tree.",
+    "colsample_bytree": "Feature sampling fraction per tree.",
+    "reg_alpha": "L1 regularization (sparsity).",
+    "reg_lambda": "L2 regularization (stability).",
+    "num_leaves": "Max leaves per LightGBM tree.",
+    "feature_fraction": "Feature sampling per LightGBM tree.",
+    "bagging_fraction": "Row sampling per LightGBM iteration.",
+    "bagging_freq": "How often to bag (0=off).",
+    "lambda_l1": "L1 regularization (LightGBM).",
+    "lambda_l2": "L2 regularization (LightGBM).",
+    "min_data_in_leaf": "Minimum samples per leaf.",
+
+    # Profile / viz (matches your Getting Started page)
+    "Preview rows": "How many rows to preview (max 25).",
+    "Numeric": "Numeric column for the boxplot.",
+    "Category": "Categorical column used to group values.",
+    "Palette": "Matplotlib palette for boxplot categories.",
+    "Method": "Correlation method: Pearson, Spearman, or Kendall.",
+    "Show heatmap": "Toggle the correlation heatmap.",
+    "Columns (optional subset)": "Limit correlation to selected numeric columns.",
+}
+
+# 2) Heuristics so custom labels still get helpful tooltips
+def _infer_tooltip(label: Any) -> str:
+    if not label:
+        return "Hover for guidance on how this input affects the analysis."
+    lab = str(label).strip()
+    if lab in _TOOLTIP_MAP:
+        return _TOOLTIP_MAP[lab]
+    l = lab.lower()
+
+    # Light heuristics (safe defaults)
+    if "xpath" in l:
+        return "XPath to each repeated record node (e.g., .//row, .//record, .//item)."
+    if any(k in l for k in ("date", "time", "timestamp")):
+        return "Select the timestamp column used as the index."
+    if any(k in l for k in ("target", "value", "measure", "y ")):
+        return "Numeric measure to model and forecast."
+    if "freq" in l or "resample" in l:
+        return "Sampling frequency (D/W/M/Q). Choose 'raw' to keep original."
+    if "horizon" in l or "steps" in l:
+        return "Number of periods to forecast ahead."
+    if "season" in l and ("(m)" in l or l.strip() in {"m", "seasonal period", "seasonal_periods"}):
+        return "Seasonal cycle length (e.g., 7 weekly, 12 monthly)."
+    if any(k in l for k in ("upload", "file", "data")):
+        return "Upload a data file (CSV/Excel/JSON/Parquet/XML)."
+    if any(k in l for k in ("exog", "feature", "driver")):
+        return "Optional driver variables aligned with the series; can be lagged and scaled."
+    if "missing" in l:
+        return "How gaps are handled (forward/backfill, interpolation, constant, etc.)."
+    if "metric" in l:
+        return "Error metrics used to compare models."
+    if "palette" in l:
+        return "Pick a matplotlib palette for category colors."
+    return "Hover for guidance on how this input affects the analysis."
+
+# 3) Wrapper to inject `help=` only if missing
+def _with_default_help(fn: Callable[..., Any]) -> Callable[..., Any]:
+    def wrapped(label: Any, *args: Any, **kwargs: Any) -> Any:
+        if not kwargs.get("help"):
+            kwargs["help"] = _infer_tooltip(label)
+        return fn(label, *args, **kwargs)
+    return wrapped
+
+# 4) Patch common Streamlit input widgets (single pass, idempotent)
+def install_unified_tooltips() -> None:
+    if getattr(st.session_state, "_tooltips_patched", False):
+        return
+    for _name in (
+        "text_input", "number_input", "selectbox", "multiselect", "checkbox",
+        "slider", "date_input", "file_uploader", "radio", "text_area",
+        "time_input", "select_slider"
+    ):
+        if hasattr(st, _name):
+            setattr(st, _name, _with_default_help(getattr(st, _name)))
+    st.session_state["_tooltips_patched"] = True
+
+# Call once (safe if re-run)
+install_unified_tooltips()
+# =================== end unified tooltips (Forecast360) ====================
 
 
 def render_kb_footer():
