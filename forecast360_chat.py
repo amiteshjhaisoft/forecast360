@@ -790,7 +790,7 @@ def main():
     st.session_state["collection_name"] = f"kb-{stable_hash(str(kb_dir))}"
 
     # 3) Top header + compact controls
-    st.markdown("### 💬 Chat with Forecast360)")
+    st.markdown("### 💬 Chat with Forecast360")
     st.markdown(f"<div class='status-inline'><b>KB Sync:</b> {sync_label}</div>", unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns([1,1,1,2], vertical_alignment="center")
