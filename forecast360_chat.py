@@ -153,10 +153,15 @@ def _resolve_avatar_paths() -> Tuple[Optional[Path], Optional[Path]]:
     user = _first_existing([
         Path(user_env).expanduser().resolve() if user_env else None,
         Path.cwd() / "assets" / "avatar.png",
+        Path.cwd() / "assets" / "user.png",
+        Path.cwd() / "assets" / "me.png",
     ])
     asst = _first_existing([
         Path(asst_env).expanduser().resolve() if asst_env else None,
         Path.cwd() / "assets" / "llm.png",
+        Path.cwd() / "assets" / "assistant.png",
+        Path.cwd() / "assets" / "bot.png",
+        Path.cwd() / "assets" / "robot.png",
     ])
     return user, asst
 
@@ -634,10 +639,11 @@ def auto_index_if_needed(status_placeholder: Optional[object] = None) -> Optiona
 # ---------------- UI helpers
 
 def _avatar_for_role(role: str) -> Optional[str]:
-    if role == "user" and USER_AVATAR_PATH:
-        return str(USER_AVATAR_PATH)
-    if role == "assistant" and ASSIST_AVATAR_PATH:
-        return str(ASSIST_AVATAR_PATH)
+    # Prefer data URIs (work in Streamlit avatars); fall back to local path, then emoji
+    if role == "user":
+        return USER_AVATAR_URI or (str(USER_AVATAR_PATH) if USER_AVATAR_PATH else "👤")
+    if role == "assistant":
+        return ASSISTANT_AVATAR_URI or (str(ASSISTANT_AVATAR_PATH) if ASSISTANT_AVATAR_PATH else "🤖")
     return None
 
 
