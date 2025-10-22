@@ -57,11 +57,11 @@ azure-storage-blob>=12.22.0
 azure-identity>=1.17.1
 
 # ---------- Optional (only enable if needed) ----------
-# weaviate-client>=4.9.0        # If you use Weaviate in this app
-# pmdarima
-# prophet                       # heavy; needs compiler toolchain
-# tbats
-# xgboost
-# lightgbm
-# darts                         # heavy; pulls torch & lightning
-# langsmith
+weaviate-client>=4.9.0        # If you use Weaviate in this app
+pmdarima
+prophet                       # heavy; needs compiler toolchain
+tbats
+xgboost
+lightgbm
+darts                         # heavy; pulls torch & lightning
+langsmith
