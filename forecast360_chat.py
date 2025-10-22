@@ -71,19 +71,16 @@ class AzureSettings:
 
 def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
     """Get value from st.secrets (nested) or env. Example: 'weaviate.url' or 'AZURE_CONNECTION_STRING'."""
-    # nested secrets like group.key
     if "." in path:
         g, k = path.split(".", 1)
         try:
             return st.secrets[g][k]
         except Exception:
             pass
-    # single key
     try:
         return st.secrets[path]
     except Exception:
         pass
-    # env fallback (dots -> underscores)
     return os.environ.get(path.replace(".", "_").upper(), default)
 
 
@@ -117,8 +114,7 @@ def resolve_azure_settings() -> AzureSettings:
 def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
     """
     Safely split netloc into (auth, host, port_str) without raising.
-    - Handles 'user:pass@host:port'
-    - Handles IPv6 '[::1]' and '[::1]:8080'
+    - Handles 'user:pass@host:port' and IPv6 '[::1]:8080'
     - Trims stray whitespace
     - Returns port_str as digits-only string or None
     """
@@ -160,11 +156,10 @@ def _normalize_weaviate_url(raw: str) -> str:
     - Adds scheme if missing (https for cloud hosts, else http)
     - Strips ':443' on https and ':80' on http
     - Preserves any non-default port (e.g., :8080)
-    - Leaves default ports blank in the final URL
     """
     raw = (raw or "").strip()
     if not raw:
-        return "http://localhost"  # show no default port in URL
+        return "http://localhost"
 
     # Add scheme if missing
     if not re.match(r"^https?://", raw, re.IGNORECASE):
@@ -190,24 +185,29 @@ def _normalize_weaviate_url(raw: str) -> str:
     return _urlparse.urlunsplit((scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
-# ---------- Weaviate connector (version-tolerant; no timeout kwarg) ----------
+# ---------- Weaviate connector (strong verification + diagnostics) ----------
 
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     """
     - Normalizes URL (adds scheme, strips default ports, trims spaces)
     - Uses cloud helper for hosted clusters, local helper for localhost/lan
-    - Does NOT pass unsupported kwargs (like 'timeout') to older clients
-    - Verifies connectivity with a cheap metadata call
+    - No unsupported kwargs passed (older client compatibility)
+    - Verifies connectivity with a data-plane call; surfaces detailed errors
     """
-    def _verify(c) -> bool:
-        try:
-            _ = c.cluster.get_meta()
-            return True
-        except Exception:
-            return False
-
     url = _normalize_weaviate_url(url)
+
+    def _verify_or_raise(c):
+        try:
+            _ = c.collections.list_all()
+        except Exception as e:
+            kind = type(e).__name__
+            msg = getattr(e, "message", None) or str(e)
+            raise RuntimeError(
+                f"Weaviate verification failed ({kind}): {msg}\n"
+                f"Resolved URL: {url}\n"
+                f"Auth provided: {'yes' if api_key else 'no'}"
+            )
 
     # Cloud?
     if any(marker in url for marker in _CLOUD_HOST_MARKERS):
@@ -215,19 +215,16 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
             cluster_url=url,
             auth_credentials=Auth.api_key(api_key) if api_key else None,
         )
-        if not _verify(c):
-            raise RuntimeError("Connected to Weaviate (cloud) but verification failed.")
+        _verify_or_raise(c)
         return c
 
     # Local/dev (http[s]://host[:port])
     parsed = _urlparse.urlsplit(url)
     host = (parsed.hostname or "localhost").strip()
-    # Don't rely on parsed.port; re-split to avoid cast issues from malformed input
     _, _, port_str = _split_netloc_safe(parsed.netloc)
     port = int(port_str) if port_str else 8080  # runtime default for local connect
     c = weaviate.connect_to_local(http_host=host, http_port=port)
-    if not _verify(c):
-        raise RuntimeError("Connected to Weaviate (local) but verification failed.")
+    _verify_or_raise(c)
     return c
 
 
@@ -472,6 +469,16 @@ st.divider()
 # Read settings only from secrets/env
 wset = resolve_weaviate_settings()
 aset = resolve_azure_settings()
+
+# Diagnostics (so you can see what the app resolved)
+with st.expander("🔎 Connection diagnostics", expanded=False):
+    st.write({
+        "weaviate_url_resolved": _normalize_weaviate_url(wset.url),
+        "api_key_present": bool(wset.api_key),
+        "collection": wset.collection,
+        "azure_container": aset.container,
+        "azure_prefix": aset.prefix,
+    })
 
 # Sidebar: just actions (no secrets shown)
 with st.sidebar:
