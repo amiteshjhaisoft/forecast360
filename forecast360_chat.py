@@ -114,30 +114,43 @@ def resolve_azure_settings() -> AzureSettings:
 
 def _normalize_weaviate_url(raw: str) -> str:
     """
-    Return a clean https URL for cloud, or http URL for local.
-    - Adds scheme if missing
-    - Strips explicit ':443' for cloud hosts
-    - Keeps explicit non-443 ports (e.g., :8080) for local
+    Normalize a Weaviate URL with no default ports in the netloc.
+    - Adds scheme if missing (https for cloud hosts, else http)
+    - Strips :443 for https and :80 for http
+    - Preserves any explicit non-default port (e.g., :8080)
     """
     raw = (raw or "").strip()
     if not raw:
-        return "http://localhost:8080"
+        # leave scheme+host only; do not append a default port in the URL
+        return "http://localhost"
 
-    # If missing scheme, assume https for cloud-like hosts, else http
+    # Add scheme if missing
     if not re.match(r"^https?://", raw, re.IGNORECASE):
         scheme = "https" if any(m in raw for m in _CLOUD_HOST_MARKERS) else "http"
         raw = f"{scheme}://{raw}"
 
     parsed = _urlparse.urlsplit(raw)
-    hostport = parsed.netloc
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname or ""
+    port = parsed.port  # None if not present
 
-    # If it's a cloud host and netloc ends with ':443', strip the port
-    if any(m in hostport for m in _CLOUD_HOST_MARKERS) and hostport.endswith(":443"):
-        hostport = hostport[:-4]
+    # Strip default ports only
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+        netloc = host
+    else:
+        # Keep user-specified non-default port (if any)
+        netloc = f"{host}:{port}" if port else host
 
-    # Rebuild URL
-    cleaned = _urlparse.urlunsplit((parsed.scheme, hostport, parsed.path, parsed.query, parsed.fragment))
-    return cleaned
+    # Preserve username/password if ever present (rare for Weaviate URLs)
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password:
+            auth += f":{parsed.password}"
+        netloc = f"{auth}@{netloc}"
+
+    # Rebuild with cleaned netloc (no default port)
+    return _urlparse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
 
 
 @st.cache_resource(show_spinner=False)
