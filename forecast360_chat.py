@@ -9,12 +9,20 @@ from typing import Any, Dict, List, Optional, Iterable, Tuple
 
 import streamlit as st
 
-# ---------- Weaviate (client v4 + Agents) ----------
+# ---------- Weaviate (client v4 + optional Agents) ----------
 import weaviate
 from weaviate.classes.init import Auth
-from weaviate.agents.query import QueryAgent
-from weaviate_agents.classes import QueryAgentCollectionConfig
 from weaviate.classes.config import Property, DataType, Configure
+
+# Weaviate Agents are optional; guard the import so the app won't crash if missing
+QueryAgentImportError = None
+try:
+    from weaviate.agents.query import QueryAgent
+    from weaviate_agents.classes import QueryAgentCollectionConfig
+except Exception as e:  # WeaviateAgentsNotInstalledError or version mismatch
+    QueryAgent = None  # type: ignore
+    QueryAgentCollectionConfig = None  # type: ignore
+    QueryAgentImportError = e
 
 # ---------- Azure Blob ----------
 from azure.storage.blob import BlobServiceClient
@@ -58,16 +66,15 @@ class WeaviateSettings:
 class AzureSettings:
     connection_string: Optional[str] = None
     account_url: Optional[str] = None          # e.g. https://<acct>.blob.core.windows.net
-    account_name: Optional[str] = None         # if you prefer account/key
+    account_name: Optional[str] = None
     account_key: Optional[str] = None
     container: str = "knowledgebase"
     prefix: str = "KB/"
 
 
 def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
-    """
-    Fetch value from Streamlit secrets (nested) or environment.
-    'path' can be 'weaviate.url' or 'azure.connection_string' or single-level 'WEAVIATE_URL'.
+    """Fetch value from Streamlit secrets (nested) or environment.
+    Examples: 'weaviate.url', 'azure.connection_string', 'WEAVIATE_URL' (env).
     """
     # try st.secrets deeply
     if "." in path:
@@ -81,7 +88,7 @@ def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
             return st.secrets[path]
         except Exception:
             pass
-    # env fallback
+    # env fallback (turn dots into underscores)
     return os.environ.get(path.replace(".", "_").upper(), default)
 
 
@@ -93,38 +100,21 @@ def resolve_weaviate_settings() -> WeaviateSettings:
     )
     api_key = _get_secret("weaviate.api_key") or _get_secret("WEAVIATE_API_KEY") or None
     collection = _get_secret("weaviate.collection", DEFAULT_COLLECTION) or DEFAULT_COLLECTION
-
-    with st.sidebar:
-        st.subheader("🔧 Weaviate Agent Settings")
-        url = st.text_input("Weaviate URL", url, help="Cloud or local (e.g., http://localhost:8080)")
-        api_key = st.text_input("Weaviate API Key (optional for local)", api_key or "", type="password")
-        collection = st.text_input("Collection name", collection, help="Weaviate collection for KB")
-        top_k = st.slider("Top-K snippets", 1, 20, 5)
-        alpha = st.slider("Hybrid α (0=BM25, 1=Vector)", 0.0, 1.0, 0.5, 0.05)
-    return WeaviateSettings(url=url, api_key=api_key or None, collection=collection, top_k=top_k, alpha=alpha)
+    # UI-independent tuning knobs (can be kept fixed or read from secrets too)
+    top_k = int(_get_secret("weaviate.top_k", "5"))
+    alpha = float(_get_secret("weaviate.alpha", "0.5"))
+    timeout_s = int(_get_secret("weaviate.timeout_s", "60"))
+    return WeaviateSettings(url=url, api_key=api_key, collection=collection, top_k=top_k, alpha=alpha, timeout_s=timeout_s)
 
 
 def resolve_azure_settings() -> AzureSettings:
+    # Prefer connection string; otherwise allow account_url + account_key or account_name + account_key (unused here)
     conn = _get_secret("azure.connection_string") or _get_secret("AZURE_CONNECTION_STRING")
     acct_url = _get_secret("azure.account_url") or _get_secret("AZURE_ACCOUNT_URL")
     acct_name = _get_secret("azure.account_name") or _get_secret("AZURE_ACCOUNT_NAME")
     acct_key = _get_secret("azure.account_key") or _get_secret("AZURE_ACCOUNT_KEY")
     container = _get_secret("azure.container", "knowledgebase") or "knowledgebase"
     prefix = _get_secret("azure.prefix", "KB/") or "KB/"
-
-    with st.sidebar:
-        st.subheader("🗄️ Azure Blob Source")
-        container = st.text_input("Container", container)
-        prefix = st.text_input("Prefix (folder)", prefix)
-        with st.expander("Azure auth (choose one)"):
-            conn = st.text_input("Connection string", conn or "", type="password")
-            acct_url = st.text_input("Account URL", acct_url or "", help="https://<account>.blob.core.windows.net")
-            col1, col2 = st.columns(2)
-            with col1:
-                acct_name = st.text_input("Account name", acct_name or "")
-            with col2:
-                acct_key = st.text_input("Account key", acct_key or "", type="password")
-
     return AzureSettings(
         connection_string=conn or None,
         account_url=acct_url or None,
@@ -137,6 +127,7 @@ def resolve_azure_settings() -> AzureSettings:
 
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
+    """Connect to Weaviate (cloud or local). Cached across reruns."""
     if url.startswith("http"):
         if any(k in url for k in ("weaviate.network", "weaviate.cloud", "semi.network")):
             return weaviate.connect_to_weaviate_cloud(
@@ -145,14 +136,11 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
                 timeout=timeout_s,
             )
         else:
-            # local
-            host = url.replace("http://", "").replace("https://", "")
-            host = host.split("/")[0]
+            host = url.replace("http://", "").replace("https://", "").split("/")[0]
             parts = host.split(":")
             http_host = parts[0]
             http_port = int(parts[1]) if len(parts) > 1 else 8080
             return weaviate.connect_to_local(http_host=http_host, http_port=http_port, grpc_port=None, timeout=timeout_s)
-    # else: raw cluster identifier
     return weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
         auth_credentials=Auth.api_key(api_key) if api_key else None,
@@ -161,14 +149,10 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
 
 
 def ensure_collection(client, name: str):
-    """
-    Ensure a collection exists with reasonable KB properties and server-side vectorizer.
-    You can switch to Configure.Vectorizer.none() if you intend to push vectors yourself.
-    """
+    """Ensure a collection exists with reasonable KB properties and server-side vectorizer."""
     try:
         exists = any(c.name == name for c in client.collections.list_all().collections)
     except Exception:
-        # older client fallbacks
         try:
             client.collections.get(name)
             exists = True
@@ -178,11 +162,11 @@ def ensure_collection(client, name: str):
     if not exists:
         client.collections.create(
             name=name,
-            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # requires module on the Weaviate server
+            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # Make sure your Weaviate has this module
             properties=[
                 Property(name="text", data_type=DataType.TEXT),
-                Property(name="title", data_type=DataType.TEXT, description="Optional title"),
-                Property(name="source", data_type=DataType.TEXT, description="Blob name or URI"),
+                Property(name="title", data_type=DataType.TEXT),
+                Property(name="source", data_type=DataType.TEXT),
                 Property(name="path", data_type=DataType.TEXT),
                 Property(name="page", data_type=DataType.INT),
                 Property(name="block_id", data_type=DataType.TEXT),
@@ -195,7 +179,7 @@ def _azure_blob_client(az: AzureSettings) -> BlobServiceClient:
         return BlobServiceClient.from_connection_string(az.connection_string)
     if az.account_url and az.account_key:
         return BlobServiceClient(account_url=az.account_url, credential=az.account_key)
-    raise RuntimeError("Provide Azure Blob connection_string or account_url + account_key.")
+    raise RuntimeError("Provide Azure Blob connection_string or account_url + account_key via secrets/env.")
 
 
 # =========================
@@ -203,10 +187,7 @@ def _azure_blob_client(az: AzureSettings) -> BlobServiceClient:
 # =========================
 
 def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    Returns list of (text, meta) pairs extracted from a blob file.
-    meta includes source, page, etc.
-    """
+    """Return list of (text, meta) pairs extracted from a blob file."""
     name_l = name.lower()
     meta_base = {"source": name, "path": name}
 
@@ -221,10 +202,8 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
     if name_l.endswith((".txt", ".md", ".log")):
         items.append((_as_utf8(content), {**meta_base}))
     elif name_l.endswith(".csv"):
-        # Keep text; pandas reading is optional here
         items.append((_as_utf8(content), {**meta_base}))
     elif name_l.endswith(".json"):
-        # pretty print JSON to text
         try:
             obj = json.loads(_as_utf8(content))
             items.append((json.dumps(obj, indent=2, ensure_ascii=False), {**meta_base}))
@@ -268,7 +247,7 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
         except Exception:
             pass
     else:
-        # Fallback: try decode
+        # Fallback: try decode as text
         try:
             items.append((_as_utf8(content), {**meta_base}))
         except Exception:
@@ -286,13 +265,10 @@ def chunk_text(text: str, max_len: int = 1000, overlap: int = 200) -> List[str]:
     while i < len(text):
         parts.append(text[i:i + max_len])
         i += max_len - overlap
-        if i < 0:  # safety
-            break
     return parts
 
 
 def upsert_chunks(coll, records: List[Dict[str, Any]]):
-    # Try bulk insert if available
     try:
         coll.data.insert_many(records)
     except Exception:
@@ -304,10 +280,7 @@ def upsert_chunks(coll, records: List[Dict[str, Any]]):
 
 
 def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: str) -> Dict[str, int]:
-    """
-    Streams blobs under container/prefix, extracts text, chunks, and upserts into Weaviate.
-    Returns summary counts.
-    """
+    """Stream blobs under container/prefix, extract text, chunk, and upsert into Weaviate."""
     ensure_collection(client, collection_name)
     coll = client.collections.get(collection_name)
 
@@ -321,19 +294,15 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
 
     blob_iter = container.list_blobs(name_starts_with=az.prefix)
     prog = st.progress(0.0)
-    file_counter = 0
-
-    for blob in blob_iter:
+    for i, blob in enumerate(blob_iter, 1):
         total_blobs += 1
-        file_counter += 1
-        prog.progress(min(0.99, file_counter / max(total_blobs, file_counter + 1)))
+        prog.progress(min(0.99, i / max(total_blobs, i + 1)))
 
         try:
-            downloader = container.download_blob(blob.name)
-            data = downloader.readall()
+            data = container.download_blob(blob.name).readall()
             pairs = extract_text_from_blob(blob.name, data)
-            file_chunks = 0
             to_insert: List[Dict[str, Any]] = []
+            file_chunks = 0
 
             for txt, meta in pairs:
                 for j, ctext in enumerate(chunk_text(txt, 1000, 200)):
@@ -367,7 +336,10 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
     }
 
 
-def build_agent(client, collection_name: str) -> QueryAgent:
+def build_agent(client, collection_name: str):
+    """Return a QueryAgent if available; otherwise None (we'll fallback)."""
+    if QueryAgent is None or QueryAgentCollectionConfig is None:
+        return None
     return QueryAgent(
         client=client,
         collections=[QueryAgentCollectionConfig(name=collection_name)],
@@ -415,11 +387,15 @@ def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, al
 st.set_page_config(page_title="Forecast360 Agent (Weaviate)", page_icon="🤖", layout="wide")
 st.title("🤖 Forecast360 — Knowledge Agent")
 st.caption("Ingest from Azure Blob → Weaviate ‘Forecast360’, then chat with your KB.")
+st.divider()
 
+# Read settings ONLY from secrets/env (no sidebar inputs)
 wset = resolve_weaviate_settings()
 aset = resolve_azure_settings()
 
+# Minimal sidebar: action buttons only (no connection inputs)
 with st.sidebar:
+    st.subheader("Actions")
     connect_clicked = st.button("🔌 Connect / Refresh Weaviate", type="primary", use_container_width=True)
     ingest_clicked = st.button("⬆️ Ingest from Azure → Weaviate", use_container_width=True)
 
@@ -444,18 +420,14 @@ if ingest_clicked:
     with st.spinner("Ingesting from Azure Blob…"):
         try:
             summary = ingest_azure_prefix_to_weaviate(st.session_state.client, aset, wset.collection)
-            st.success(f"Ingestion complete: {summary}")
+            st.success("Ingestion complete.")
             st.json(summary)
         except Exception as e:
             st.error(f"Ingestion failed: {e}")
 
-# Build agent
+# Prepare agent (or fallback)
 if "agent" not in st.session_state or connect_clicked:
-    try:
-        st.session_state.agent = build_agent(st.session_state.client, wset.collection)
-    except Exception as e:
-        st.error(f"Agent init failed: {e}")
-        st.stop()
+    st.session_state.agent = build_agent(st.session_state.client, wset.collection)
 
 # Chat history
 if "messages" not in st.session_state:
@@ -468,14 +440,16 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-prompt = st.chat_input("Ask a question about the Forecast360 KB…")
+prompt = st.chat_input(f"Ask a question about the {wset.collection} KB…")
 
 def render_snippets(snips: List[Dict[str, Any]]):
     if not snips:
         return
     st.markdown("#### 🔎 Supporting snippets")
     for i, s in enumerate(snips, 1):
-        with st.expander(f"Match {i} — score={s.get('score'):.4f if s.get('score') is not None else 'n/a'} | {s.get('source')}", expanded=(i == 1)):
+        score = s.get("score")
+        score_str = f"{score:.4f}" if isinstance(score, (int, float)) else "n/a"
+        with st.expander(f"Match {i} — score={score_str} | {s.get('source')}", expanded=(i == 1)):
             if s.get("title"):
                 st.markdown(f"**{s['title']}**")
             if s.get("page"):
@@ -490,26 +464,28 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # agent turn
+    # assistant turn
     try:
         with st.chat_message("assistant"):
             with st.spinner("Thinking…"):
-                result = st.session_state.agent.run(prompt)
-
-                # Extract answer
-                answer_text = None
-                citations = None
-                try:
-                    answer_text = getattr(result, "content", None)
-                    citations = getattr(result, "citations", None) or getattr(result, "evidence", None)
-                except Exception:
-                    pass
-                if not answer_text:
-                    answer_text = str(result)
+                if st.session_state.agent is not None:
+                    # Use QueryAgent (requires weaviate-agents)
+                    result = st.session_state.agent.run(prompt)
+                    answer_text = getattr(result, "content", None) or str(result)
+                else:
+                    # Fallback: hybrid search summary (works without agents package)
+                    st.info("Using hybrid-search fallback (install 'weaviate-agents' for QueryAgent).")
+                    snips = hybrid_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha)
+                    if snips:
+                        # naive summary: join top snippets (you can replace with LLM if desired)
+                        joined = "\n\n".join(s["text"] for s in snips[:3] if s.get("text"))
+                        answer_text = f"Here are the most relevant excerpts I found:\n\n{joined}"
+                    else:
+                        answer_text = "I couldn't find relevant excerpts in the knowledge base."
 
                 st.markdown(answer_text)
 
-            # Show supporting matches
+            # Always show supporting matches
             snips = hybrid_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha)
             render_snippets(snips)
 
@@ -517,4 +493,11 @@ if prompt:
 
     except Exception as e:
         with st.chat_message("assistant"):
-            st.error(f"Agent error: {e}")
+            if QueryAgent is None and QueryAgentImportError is not None:
+                st.error(
+                    "Weaviate Agents not available. Install with:\n\n"
+                    "`pip install -U weaviate-client weaviate-agents`\n\n"
+                    f"Details: {QueryAgentImportError}"
+                )
+            else:
+                st.error(f"Agent error: {e}")
