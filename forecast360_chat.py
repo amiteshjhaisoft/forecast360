@@ -158,7 +158,7 @@ def _normalize_weaviate_url(raw: str) -> str:
     Normalize a Weaviate URL with no default ports in the netloc.
     - Trims whitespace
     - Adds scheme if missing (https for cloud hosts, else http)
-    - Strips ':443' on https and ':80' on http
+    - Strips ':0' on https and ':80' on http
     - Preserves any non-default port (e.g., :8080)
     - Leaves default ports blank in the final URL
     """
@@ -177,7 +177,7 @@ def _normalize_weaviate_url(raw: str) -> str:
     auth, host, port_str = _split_netloc_safe(parsed.netloc)
 
     # Strip default ports only
-    if port_str and ((scheme == "https" and port_str == "443") or (scheme == "http" and port_str == "80")):
+    if port_str and ((scheme == "https" and port_str == "0") or (scheme == "http" and port_str == "80")):
         port_str = None
 
     # Rebuild netloc (no default port)
