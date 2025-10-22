@@ -110,7 +110,7 @@ except Exception:
         # Older LangChain
         from langchain.agents import Tool
 
-from langchain.agents import AgentExecutor, create_react_agent
+# from langchain.agents import AgentExecutor, create_react_agent
 
 # ---- Memory / History
 from langchain.memory import ChatMessageHistory
