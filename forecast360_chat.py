@@ -26,7 +26,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 # ---- LangChain / Vector
-from langchain_community.vectorstores import FAISS
+# from langchain_community.vectorstores import FAISS
 try:
     from langchain_huggingface import HuggingFaceEmbeddings
 except Exception:
