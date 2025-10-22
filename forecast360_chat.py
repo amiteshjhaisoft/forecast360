@@ -112,23 +112,12 @@ def resolve_azure_settings() -> AzureSettings:
 # ---------- URL normalization & safe netloc split ----------
 
 def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
-    """
-    Safely split netloc into (auth, host, port_str) without raising.
-    - Handles 'user:pass@host:port' and IPv6 '[::1]:8080'
-    - Trims stray whitespace
-    - Returns port_str as digits-only string or None
-    """
     netloc = (netloc or "").strip()
     auth = None
     hostport = netloc
-
-    # auth?
     if "@" in netloc:
         auth, hostport = netloc.rsplit("@", 1)
-        auth = auth.strip()
-        hostport = hostport.strip()
-
-    # IPv6 like [::1] or [::1]:8080
+        auth = auth.strip(); hostport = hostport.strip()
     if hostport.startswith("["):
         end = hostport.find("]")
         if end != -1:
@@ -137,8 +126,6 @@ def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
             m = re.search(r":(\d+)$", remainder)
             port_str = m.group(1) if m else None
             return auth, host, port_str
-
-    # Regular host[:port]
     m = re.search(r":(\d+)$", hostport)
     if m:
         host = hostport[: m.start()].strip()
@@ -150,50 +137,33 @@ def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
 
 
 def _normalize_weaviate_url(raw: str) -> str:
-    """
-    Normalize a Weaviate URL with no default ports in the netloc.
-    - Trims whitespace
-    - Adds scheme if missing (https for cloud hosts, else http)
-    - Strips ':443' on https and ':80' on http
-    - Preserves any non-default port (e.g., :8080)
-    """
+    """Add scheme if missing; strip default ports (:443 https, :80 http); preserve non-default."""
     raw = (raw or "").strip()
     if not raw:
         return "http://localhost"
-
-    # Add scheme if missing
     if not re.match(r"^https?://", raw, re.IGNORECASE):
         scheme = "https" if any(m in raw for m in _CLOUD_HOST_MARKERS) else "http"
         raw = f"{scheme}://{raw}"
-
     parsed = _urlparse.urlsplit(raw)
     scheme = parsed.scheme.lower()
-
     auth, host, port_str = _split_netloc_safe(parsed.netloc)
-
-    # Strip default ports only
     if port_str and ((scheme == "https" and port_str == "443") or (scheme == "http" and port_str == "80")):
         port_str = None
-
-    # Rebuild netloc (no default port)
-    netloc = host
-    if port_str:
-        netloc = f"{netloc}:{port_str}"
+    netloc = host if not port_str else f"{host}:{port_str}"
     if auth:
         netloc = f"{auth}@{netloc}"
-
     return _urlparse.urlunsplit((scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
-# ---------- Weaviate connector (strong verification + diagnostics) ----------
+# ---------- Weaviate connector (strong verification; no diagnostics UI) ----------
 
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     """
-    - Normalizes URL (adds scheme, strips default ports, trims spaces)
-    - Uses cloud helper for hosted clusters, local helper for localhost/lan
-    - No unsupported kwargs passed (older client compatibility)
-    - Verifies connectivity with a data-plane call; surfaces detailed errors
+    - Normalizes URL
+    - Uses cloud helper for hosted clusters, local helper otherwise
+    - No unsupported kwargs
+    - Verifies with a data-plane call; raises helpful error
     """
     url = _normalize_weaviate_url(url)
 
@@ -209,7 +179,6 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
                 f"Auth provided: {'yes' if api_key else 'no'}"
             )
 
-    # Cloud?
     if any(marker in url for marker in _CLOUD_HOST_MARKERS):
         c = weaviate.connect_to_weaviate_cloud(
             cluster_url=url,
@@ -218,18 +187,22 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
         _verify_or_raise(c)
         return c
 
-    # Local/dev (http[s]://host[:port])
     parsed = _urlparse.urlsplit(url)
     host = (parsed.hostname or "localhost").strip()
     _, _, port_str = _split_netloc_safe(parsed.netloc)
-    port = int(port_str) if port_str else 8080  # runtime default for local connect
+    port = int(port_str) if port_str else 8080
     c = weaviate.connect_to_local(http_host=host, http_port=port)
     _verify_or_raise(c)
     return c
 
 
-def ensure_collection(client, name: str):
-    """Create collection if missing; uses server-side vectorizer (requires module enabled on server)."""
+def ensure_collection(client, name: str) -> str:
+    """
+    Ensure the collection exists. Prefer server vectorizer; if unavailable,
+    fall back to 'none' so BM25-only search still works.
+    Returns the vectorizer mode: 'transformers' or 'none'.
+    """
+    # Does it already exist?
     try:
         exists = any(c.name == name for c in client.collections.list_all().collections)
     except Exception:
@@ -240,18 +213,44 @@ def ensure_collection(client, name: str):
             exists = False
 
     if not exists:
-        client.collections.create(
-            name=name,
-            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # ensure this module is enabled
-            properties=[
-                Property(name="text", data_type=DataType.TEXT),
-                Property(name="title", data_type=DataType.TEXT),
-                Property(name="source", data_type=DataType.TEXT),
-                Property(name="path", data_type=DataType.TEXT),
-                Property(name="page", data_type=DataType.INT),
-                Property(name="block_id", data_type=DataType.TEXT),
-            ],
-        )
+        # Try with server-side vectorizer first
+        try:
+            client.collections.create(
+                name=name,
+                vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
+                properties=[
+                    Property(name="text", data_type=DataType.TEXT),
+                    Property(name="title", data_type=DataType.TEXT),
+                    Property(name="source", data_type=DataType.TEXT),
+                    Property(name="path", data_type=DataType.TEXT),
+                    Property(name="page", data_type=DataType.INT),
+                    Property(name="block_id", data_type=DataType.TEXT),
+                ],
+            )
+            return "transformers"
+        except Exception:
+            # Fall back: no vectorizer
+            client.collections.create(
+                name=name,
+                vectorizer_config=Configure.Vectorizer.none(),
+                properties=[
+                    Property(name="text", data_type=DataType.TEXT),
+                    Property(name="title", data_type=DataType.TEXT),
+                    Property(name="source", data_type=DataType.TEXT),
+                    Property(name="path", data_type=DataType.TEXT),
+                    Property(name="page", data_type=DataType.INT),
+                    Property(name="block_id", data_type=DataType.TEXT),
+                ],
+            )
+            return "none"
+    else:
+        # Try to infer vectorizer by probing hybrid; if it fails, assume 'none'
+        try:
+            _ = client.collections.get(name)
+            # quick probe via bm25 (safe) — if works, return 'unknown'; we'll handle at query-time
+            return "unknown"
+        except Exception:
+            return "unknown"
 
 
 def _azure_blob_service(az: AzureSettings) -> BlobServiceClient:
@@ -267,7 +266,6 @@ def _azure_blob_service(az: AzureSettings) -> BlobServiceClient:
 # =========================
 
 def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[str, Optional[str]]]]:
-    """Return list of (text, meta) pairs extracted from a blob file."""
     name_l = name.lower()
     meta_base: Dict[str, Optional[str]] = {"source": name, "path": name}
 
@@ -325,7 +323,6 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
         except Exception:
             pass
     else:
-        # Fallback: try decode as text
         try:
             items.append((_as_utf8(content), {**meta_base}))
         except Exception:
@@ -358,7 +355,6 @@ def upsert_chunks(coll, records: List[Dict[str, Optional[str]]]):
 
 
 def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: str) -> Dict[str, int]:
-    """Stream blobs under container/prefix, extract text, chunk, and upsert into Weaviate."""
     ensure_collection(client, collection_name)
     coll = client.collections.get(collection_name)
 
@@ -385,7 +381,7 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
                         "title": os.path.basename(blob.name),
                         "source": meta.get("source"),
                         "path": meta.get("path"),
-                        "page": int(meta["page"]) if meta.get("page") else None,  # INT field in schema
+                        "page": int(meta["page"]) if meta.get("page") else None,
                         "block_id": f"{blob.name}#{j}",
                     })
                     file_chunks += 1
@@ -400,61 +396,64 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
             st.write(f"⚠️ Failed: {blob.name} — {e}")
 
     prog.progress(1.0)
-    return {
-        "files_seen": total_blobs,
-        "files_ok": success_files,
-        "files_failed": failed_files,
-        "chunks_upserted": total_chunks,
-    }
+    return {"files_seen": total_blobs, "files_ok": success_files, "files_failed": failed_files, "chunks_upserted": total_chunks}
 
 
 # =========================
-# Agent & hybrid search
+# Agent & search (vector → hybrid → BM25)
 # =========================
 
 def build_agent(client, collection_name: str):
-    """Return a QueryAgent if 'weaviate-agents' is installed; else None (fallback to hybrid search)."""
+    """Return a QueryAgent if 'weaviate-agents' is installed; else None."""
     if QueryAgent is None or QueryAgentCollectionConfig is None:
         return None
-    return QueryAgent(
-        client=client,
-        collections=[QueryAgentCollectionConfig(name=collection_name)],
-    )
-
-
-def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, alpha: float = 0.5) -> List[Dict[str, Optional[str]]]:
     try:
-        coll = client.collections.get(collection_name)
-    except Exception as e:
-        st.info(f"Could not access collection '{collection_name}': {e}")
-        return []
+        return QueryAgent(client=client, collections=[QueryAgentCollectionConfig(name=collection_name)])
+    except Exception:
+        return None  # if agent wiring requires vectorizer, gracefully skip
 
+
+def query_snippets(client, collection_name: str, query: str, top_k: int = 5, alpha: float = 0.5) -> List[Dict[str, Optional[str]]]:
+    """
+    Try hybrid; if the server/collection has no vectorizer, automatically fall back to BM25.
+    """
+    coll = client.collections.get(collection_name)
+
+    # Attempt hybrid first
     try:
         res = coll.query.hybrid(
-            query=query,
-            limit=top_k,
-            alpha=alpha,
+            query=query, limit=top_k, alpha=alpha,
             return_metadata=["score", "distance"],
             return_properties=["text", "title", "source", "path", "page", "block_id"],
         )
-        items: List[Dict[str, Optional[str]]] = []
-        for o in (res.objects or []):
-            props = getattr(o, "properties", {}) or {}
-            meta = getattr(o, "metadata", {}) or {}
-            score = meta.get("score")
-            items.append({
-                "text": props.get("text") or "",
-                "title": props.get("title") or "",
-                "source": props.get("source") or props.get("path") or "",
-                "page": str(props.get("page") or ""),
-                "block_id": props.get("block_id") or "",
-                "score": float(score) if isinstance(score, (int, float)) else score,
-                "distance": meta.get("distance"),
-            })
-        return items
     except Exception as e:
-        st.warning(f"Hybrid snippet fetch failed: {e}")
-        return []
+        msg = str(e).lower()
+        if "without vectorizer" in msg or "vectorfrominput" in msg or "no vectorizer" in msg:
+            # Fall back to BM25-only
+            res = coll.query.bm25(
+                query=query, limit=top_k,
+                return_properties=["text", "title", "source", "path", "page", "block_id"],
+            )
+            objects = getattr(res, "objects", []) or []
+        else:
+            raise
+
+    objects = getattr(res, "objects", []) if 'res' in locals() else []
+    items: List[Dict[str, Optional[str]]] = []
+    for o in (objects or []):
+        props = getattr(o, "properties", {}) or {}
+        meta = getattr(o, "metadata", {}) or {}
+        score = meta.get("score")
+        items.append({
+            "text": props.get("text") or "",
+            "title": props.get("title") or "",
+            "source": props.get("source") or props.get("path") or "",
+            "page": str(props.get("page") or ""),
+            "block_id": props.get("block_id") or "",
+            "score": float(score) if isinstance(score, (int, float)) else score,
+            "distance": meta.get("distance"),
+        })
+    return items
 
 
 # =========================
@@ -470,17 +469,7 @@ st.divider()
 wset = resolve_weaviate_settings()
 aset = resolve_azure_settings()
 
-# Diagnostics (so you can see what the app resolved)
-with st.expander("🔎 Connection diagnostics", expanded=False):
-    st.write({
-        "weaviate_url_resolved": _normalize_weaviate_url(wset.url),
-        "api_key_present": bool(wset.api_key),
-        "collection": wset.collection,
-        "azure_container": aset.container,
-        "azure_prefix": aset.prefix,
-    })
-
-# Sidebar: just actions (no secrets shown)
+# Sidebar: just actions (no secrets/diagnostics shown)
 with st.sidebar:
     st.subheader("Actions")
     connect_clicked = st.button("🔌 Connect / Refresh Weaviate", type="primary", use_container_width=True)
@@ -495,9 +484,9 @@ if "client" not in st.session_state or connect_clicked:
         st.error(f"Connection failed: {e}")
         st.stop()
 
-# Ensure collection exists
+# Ensure collection exists (and capture vectorizer mode for info)
 try:
-    ensure_collection(st.session_state.client, wset.collection)
+    vectorizer_mode = ensure_collection(st.session_state.client, wset.collection)
 except Exception as e:
     st.error(f"Failed to ensure collection '{wset.collection}': {e}")
     st.stop()
@@ -512,7 +501,7 @@ if ingest_clicked:
         except Exception as e:
             st.error(f"Ingestion failed: {e}")
 
-# Prepare agent (or fallback)
+# Prepare agent (may be None when vectorizer is off / agents missing)
 if "agent" not in st.session_state or connect_clicked:
     st.session_state.agent = build_agent(st.session_state.client, wset.collection)
 
@@ -553,14 +542,22 @@ if prompt:
     try:
         with st.chat_message("assistant"):
             with st.spinner("Thinking…"):
+                answer_text = None
+
+                # Try QueryAgent first (if available); if it fails due to vectorizer, fall back
                 if st.session_state.agent is not None:
-                    # Use QueryAgent (requires weaviate-agents)
-                    result = st.session_state.agent.run(prompt)
-                    answer_text = getattr(result, "content", None) or str(result)
-                else:
-                    # Fallback: hybrid search summary
-                    st.info("Using hybrid-search fallback (install 'weaviate-agents' for QueryAgent).")
-                    hits = hybrid_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha)
+                    try:
+                        result = st.session_state.agent.run(prompt)
+                        answer_text = getattr(result, "content", None) or str(result)
+                    except Exception as e:
+                        if any(s in str(e).lower() for s in ["without vectorizer", "vectorfrominput", "no vectorizer"]):
+                            pass  # will fall back below
+                        else:
+                            raise
+
+                if not answer_text:
+                    # Hybrid → BM25 fallback path
+                    hits = query_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha)
                     if hits:
                         joined = "\n\n".join(s["text"] for s in hits[:3] if s.get("text"))
                         answer_text = f"Here are the most relevant excerpts I found:\n\n{joined}"
@@ -569,8 +566,8 @@ if prompt:
 
                 st.markdown(answer_text)
 
-            # Always show supporting matches
-            _render_snippets(hybrid_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha))
+            # Show supporting matches from whatever worked
+            _render_snippets(query_snippets(st.session_state.client, wset.collection, prompt, top_k=wset.top_k, alpha=wset.alpha))
 
         st.session_state.messages.append({"role": "assistant", "content": answer_text})
 
