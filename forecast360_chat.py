@@ -88,7 +88,7 @@ def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def resolve_weaviate_settings() -> WeaviateSettings:
-    url = _get_secret("weaviate.url") or _get_secret("WEAVIATE_URL") or "http://localhost:8080"
+    url = _get_secret("weaviate.url") or _get_secret("WEAVIATE_URL") or "http://localhost"
     api_key = _get_secret("weaviate.api_key") or _get_secret("WEAVIATE_API_KEY")
     collection = _get_secret("weaviate.collection", DEFAULT_COLLECTION) or DEFAULT_COLLECTION
     top_k = int(_get_secret("weaviate.top_k", "5"))
@@ -112,17 +112,59 @@ def resolve_azure_settings() -> AzureSettings:
     )
 
 
+# ---------- URL normalization & safe netloc split ----------
+
+def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
+    """
+    Safely split netloc into (auth, host, port_str) without raising.
+    - Handles 'user:pass@host:port'
+    - Handles IPv6 '[::1]' and '[::1]:8080'
+    - Trims stray whitespace
+    - Returns port_str as digits-only string or None
+    """
+    netloc = (netloc or "").strip()
+    auth = None
+    hostport = netloc
+
+    # auth?
+    if "@" in netloc:
+        auth, hostport = netloc.rsplit("@", 1)
+        auth = auth.strip()
+        hostport = hostport.strip()
+
+    # IPv6 like [::1] or [::1]:8080
+    if hostport.startswith("["):
+        end = hostport.find("]")
+        if end != -1:
+            host = hostport[: end + 1]
+            remainder = hostport[end + 1 :].strip()
+            m = re.search(r":(\d+)$", remainder)
+            port_str = m.group(1) if m else None
+            return auth, host, port_str
+
+    # Regular host[:port]
+    m = re.search(r":(\d+)$", hostport)
+    if m:
+        host = hostport[: m.start()].strip()
+        port_str = m.group(1)
+    else:
+        host = hostport.strip()
+        port_str = None
+    return auth, host, port_str
+
+
 def _normalize_weaviate_url(raw: str) -> str:
     """
     Normalize a Weaviate URL with no default ports in the netloc.
+    - Trims whitespace
     - Adds scheme if missing (https for cloud hosts, else http)
-    - Strips :443 for https and :80 for http
-    - Preserves any explicit non-default port (e.g., :8080)
+    - Strips ':443' on https and ':80' on http
+    - Preserves any non-default port (e.g., :8080)
+    - Leaves default ports blank in the final URL
     """
     raw = (raw or "").strip()
     if not raw:
-        # leave scheme+host only; do not append a default port in the URL
-        return "http://localhost"
+        return "http://localhost"  # show no default port in URL
 
     # Add scheme if missing
     if not re.match(r"^https?://", raw, re.IGNORECASE):
@@ -131,35 +173,31 @@ def _normalize_weaviate_url(raw: str) -> str:
 
     parsed = _urlparse.urlsplit(raw)
     scheme = parsed.scheme.lower()
-    host = parsed.hostname or ""
-    port = parsed.port  # None if not present
+
+    auth, host, port_str = _split_netloc_safe(parsed.netloc)
 
     # Strip default ports only
-    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
-        netloc = host
-    else:
-        # Keep user-specified non-default port (if any)
-        netloc = f"{host}:{port}" if port else host
+    if port_str and ((scheme == "https" and port_str == "443") or (scheme == "http" and port_str == "80")):
+        port_str = None
 
-    # Preserve username/password if ever present (rare for Weaviate URLs)
-    if parsed.username:
-        auth = parsed.username
-        if parsed.password:
-            auth += f":{parsed.password}"
+    # Rebuild netloc (no default port)
+    netloc = host
+    if port_str:
+        netloc = f"{netloc}:{port_str}"
+    if auth:
         netloc = f"{auth}@{netloc}"
 
-    # Rebuild with cleaned netloc (no default port)
-    return _urlparse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return _urlparse.urlunsplit((scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
+# ---------- Weaviate connector (version-tolerant; no timeout kwarg) ----------
 
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     """
-    Version-tolerant connector:
-    - Normalizes URL (adds scheme, strips cloud ':443')
-    - Uses cloud helper for hosted clusters, local helper for localhost
-    - Avoids passing unsupported kwargs (like 'timeout') to older clients
+    - Normalizes URL (adds scheme, strips default ports, trims spaces)
+    - Uses cloud helper for hosted clusters, local helper for localhost/lan
+    - Does NOT pass unsupported kwargs (like 'timeout') to older clients
     - Verifies connectivity with a cheap metadata call
     """
     def _verify(c) -> bool:
@@ -172,7 +210,7 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     url = _normalize_weaviate_url(url)
 
     # Cloud?
-    if any(m in url for m in _CLOUD_HOST_MARKERS):
+    if any(marker in url for marker in _CLOUD_HOST_MARKERS):
         c = weaviate.connect_to_weaviate_cloud(
             cluster_url=url,
             auth_credentials=Auth.api_key(api_key) if api_key else None,
@@ -181,23 +219,17 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
             raise RuntimeError("Connected to Weaviate (cloud) but verification failed.")
         return c
 
-    # Local/dev
-    if url.startswith(("http://", "https://")):
-        parsed = _urlparse.urlsplit(url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 8080
-        c = weaviate.connect_to_local(http_host=host, http_port=int(port))
-        if not _verify(c):
-            raise RuntimeError("Connected to Weaviate (local) but verification failed.")
-        return c
-
-    # Fallback (treat as cloud)
-    c = weaviate.connect_to_weaviate_cloud(
-        cluster_url=url,
-        auth_credentials=Auth.api_key(api_key) if api_key else None,
-    )
+    # Local/dev (http[s]://host[:port])
+    parsed = _urlparse.urlsplit(url)
+    host = (parsed.hostname or "localhost").strip()
+    # Don't read parsed.port here (it can raise on malformed); we already stripped default ports.
+    # If a non-default port was present, _split_netloc_safe would have kept it in the URL string.
+    # We'll re-extract the port safely from netloc again:
+    _, _, port_str = _split_netloc_safe(parsed.netloc)
+    port = int(port_str) if port_str else 8080  # default runtime port for local connect
+    c = weaviate.connect_to_local(http_host=host, http_port=port)
     if not _verify(c):
-        raise RuntimeError("Connected to Weaviate (generic) but verification failed.")
+        raise RuntimeError("Connected to Weaviate (local) but verification failed.")
     return c
 
 
@@ -415,7 +447,6 @@ def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, al
             props = getattr(o, "properties", {}) or {}
             meta = getattr(o, "metadata", {}) or {}
             score = meta.get("score")
-            # Normalize scalar types to str/float where useful
             items.append({
                 "text": props.get("text") or "",
                 "title": props.get("title") or "",
