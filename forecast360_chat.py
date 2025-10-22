@@ -3,11 +3,13 @@
 # Author: Amitesh Jha | iSoft
 
 from __future__ import annotations
-import os, io, json
+import os, io, json, re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import urllib.parse as _urlparse
 import streamlit as st
+import pandas as pd
 
 # ---------- Weaviate (client v4; Agents optional) ----------
 import weaviate
@@ -27,8 +29,7 @@ except Exception as e:
 # ---------- Azure Blob ----------
 from azure.storage.blob import BlobServiceClient
 
-# ---------- Lightweight parsing ----------
-import pandas as pd
+# ---------- Optional extractors (best-effort) ----------
 try:
     from pypdf import PdfReader
 except Exception:
@@ -48,6 +49,7 @@ except Exception:
 # =========================
 
 DEFAULT_COLLECTION = "Forecast360"
+_CLOUD_HOST_MARKERS = ("weaviate.network", "weaviate.cloud", "semi.network", "gcp.weaviate.cloud")
 
 @dataclass
 class WeaviateSettings:
@@ -66,22 +68,24 @@ class AzureSettings:
     container: str
     prefix: str
 
+
 def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
     """Get value from st.secrets (nested) or env. Example: 'weaviate.url' or 'AZURE_CONNECTION_STRING'."""
-    # Try nested secrets like group.key
+    # nested secrets like group.key
     if "." in path:
         g, k = path.split(".", 1)
         try:
             return st.secrets[g][k]
         except Exception:
             pass
-    # Single key in secrets
+    # single key
     try:
         return st.secrets[path]
     except Exception:
         pass
-    # Env fallback (dots -> underscores)
+    # env fallback (dots -> underscores)
     return os.environ.get(path.replace(".", "_").upper(), default)
+
 
 def resolve_weaviate_settings() -> WeaviateSettings:
     url = _get_secret("weaviate.url") or _get_secret("WEAVIATE_URL") or "http://localhost:8080"
@@ -91,6 +95,7 @@ def resolve_weaviate_settings() -> WeaviateSettings:
     alpha = float(_get_secret("weaviate.alpha", "0.5"))
     timeout_s = int(_get_secret("weaviate.timeout_s", "60"))
     return WeaviateSettings(url=url, api_key=api_key, collection=collection, top_k=top_k, alpha=alpha, timeout_s=timeout_s)
+
 
 def resolve_azure_settings() -> AzureSettings:
     conn = _get_secret("azure.connection_string") or _get_secret("AZURE_CONNECTION_STRING")
@@ -106,57 +111,85 @@ def resolve_azure_settings() -> AzureSettings:
         prefix=prefix,
     )
 
+
+def _normalize_weaviate_url(raw: str) -> str:
+    """
+    Return a clean https URL for cloud, or http URL for local.
+    - Adds scheme if missing
+    - Strips explicit ':443' for cloud hosts
+    - Keeps explicit non-443 ports (e.g., :8080) for local
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return "http://localhost:8080"
+
+    # If missing scheme, assume https for cloud-like hosts, else http
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
+        scheme = "https" if any(m in raw for m in _CLOUD_HOST_MARKERS) else "http"
+        raw = f"{scheme}://{raw}"
+
+    parsed = _urlparse.urlsplit(raw)
+    hostport = parsed.netloc
+
+    # If it's a cloud host and netloc ends with ':443', strip the port
+    if any(m in hostport for m in _CLOUD_HOST_MARKERS) and hostport.endswith(":443"):
+        hostport = hostport[:-4]
+
+    # Rebuild URL
+    cleaned = _urlparse.urlunsplit((parsed.scheme, hostport, parsed.path, parsed.query, parsed.fragment))
+    return cleaned
+
+
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     """
-    Version-tolerant connector for Weaviate.
-    - Does NOT pass unsupported kwargs like 'timeout' to connect_to_* helpers.
-    - Supports cloud and local endpoints.
-    - Verifies connection with a lightweight metadata call.
+    Version-tolerant connector:
+    - Normalizes URL (adds scheme, strips cloud ':443')
+    - Uses cloud helper for hosted clusters, local helper for localhost
+    - Avoids passing unsupported kwargs (like 'timeout') to older clients
+    - Verifies connectivity with a cheap metadata call
     """
-    def _verify(_c) -> bool:
+    def _verify(c) -> bool:
         try:
-            _ = _c.cluster.get_meta()
+            _ = c.cluster.get_meta()
             return True
         except Exception:
             return False
 
-    # Cloud helper (no 'timeout' kwarg for older clients)
-    if url.startswith("http") and any(k in url for k in ("weaviate.network", "weaviate.cloud", "semi.network")):
-        try:
-            c = weaviate.connect_to_weaviate_cloud(
-                cluster_url=url,
-                auth_credentials=Auth.api_key(api_key) if api_key else None,
-            )
-            if _verify(c):
-                return c
-        except Exception:
-            pass
+    url = _normalize_weaviate_url(url)
 
-    # Local helper
-    if url.startswith("http://") or url.startswith("https://"):
-        try:
-            host_port = url.replace("http://", "").replace("https://", "").split("/")[0]
-            parts = host_port.split(":")
-            http_host = parts[0]
-            http_port = int(parts[1]) if len(parts) > 1 else 8080
-            c = weaviate.connect_to_local(http_host=http_host, http_port=http_port)
-            if _verify(c):
-                return c
-        except Exception:
-            pass
+    # Cloud?
+    if any(m in url for m in _CLOUD_HOST_MARKERS):
+        c = weaviate.connect_to_weaviate_cloud(
+            cluster_url=url,
+            auth_credentials=Auth.api_key(api_key) if api_key else None,
+        )
+        if not _verify(c):
+            raise RuntimeError("Connected to Weaviate (cloud) but verification failed.")
+        return c
 
-    # Generic fallback via cloud helper
+    # Local/dev
+    if url.startswith(("http://", "https://")):
+        parsed = _urlparse.urlsplit(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 8080
+        c = weaviate.connect_to_local(http_host=host, http_port=int(port))
+        if not _verify(c):
+            raise RuntimeError("Connected to Weaviate (local) but verification failed.")
+        return c
+
+    # Fallback (treat as cloud)
     c = weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
         auth_credentials=Auth.api_key(api_key) if api_key else None,
     )
     if not _verify(c):
-        raise RuntimeError("Connected to Weaviate but verification failed.")
+        raise RuntimeError("Connected to Weaviate (generic) but verification failed.")
     return c
 
+
 def ensure_collection(client, name: str):
-    """Create collection if missing; use server-side vectorizer (requires module enabled on server)."""
+    """Create collection if missing; uses server-side vectorizer (requires module enabled on server)."""
     try:
         exists = any(c.name == name for c in client.collections.list_all().collections)
     except Exception:
@@ -169,7 +202,7 @@ def ensure_collection(client, name: str):
     if not exists:
         client.collections.create(
             name=name,
-            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # Ensure this module is enabled
+            vectorizer_config=Configure.Vectorizer.text2vec_transformers(),  # ensure this module is enabled
             properties=[
                 Property(name="text", data_type=DataType.TEXT),
                 Property(name="title", data_type=DataType.TEXT),
@@ -180,6 +213,7 @@ def ensure_collection(client, name: str):
             ],
         )
 
+
 def _azure_blob_service(az: AzureSettings) -> BlobServiceClient:
     if az.connection_string:
         return BlobServiceClient.from_connection_string(az.connection_string)
@@ -187,20 +221,23 @@ def _azure_blob_service(az: AzureSettings) -> BlobServiceClient:
         return BlobServiceClient(account_url=az.account_url, credential=az.account_key)
     raise RuntimeError("Provide Azure Blob 'connection_string' or 'account_url' + 'account_key' via secrets/env.")
 
+
 # =========================
 # Extraction, chunking, upsert
 # =========================
 
-def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[str, Any]]]:
+def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[str, Optional[str]]]]:
     """Return list of (text, meta) pairs extracted from a blob file."""
     name_l = name.lower()
-    meta_base = {"source": name, "path": name}
+    meta_base: Dict[str, Optional[str]] = {"source": name, "path": name}
 
     def _as_utf8(b: bytes) -> str:
-        try: return b.decode("utf-8")
-        except Exception: return b.decode("latin-1", "ignore")
+        try:
+            return b.decode("utf-8")
+        except Exception:
+            return b.decode("latin-1", "ignore")
 
-    items: List[Tuple[str, Dict[str, Any]]] = []
+    items: List[Tuple[str, Dict[str, Optional[str]]]] = []
 
     if name_l.endswith((".txt", ".md", ".log", ".csv")):
         items.append((_as_utf8(content), {**meta_base}))
@@ -216,7 +253,7 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
             for i, page in enumerate(reader.pages, 1):
                 txt = page.extract_text() or ""
                 if txt.strip():
-                    items.append((txt, {**meta_base, "page": i}))
+                    items.append((txt, {**meta_base, "page": str(i)}))
         except Exception:
             pass
     elif name_l.endswith(".docx") and docx2txt:
@@ -238,7 +275,7 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
                         texts.append(shape.text)
                 slide_txt = "\n".join(texts).strip()
                 if slide_txt:
-                    items.append((slide_txt, {**meta_base, "page": page}))
+                    items.append((slide_txt, {**meta_base, "page": str(page)}))
         except Exception:
             pass
     elif name_l.endswith((".xlsx", ".xls")):
@@ -256,9 +293,11 @@ def extract_text_from_blob(name: str, content: bytes) -> List[Tuple[str, Dict[st
 
     return items
 
+
 def chunk_text(text: str, max_len: int = 1000, overlap: int = 200) -> List[str]:
     text = " ".join(text.split())
-    if not text: return []
+    if not text:
+        return []
     parts: List[str] = []
     i = 0
     while i < len(text):
@@ -266,13 +305,17 @@ def chunk_text(text: str, max_len: int = 1000, overlap: int = 200) -> List[str]:
         i += max_len - overlap
     return parts
 
-def upsert_chunks(coll, records: List[Dict[str, Any]]):
+
+def upsert_chunks(coll, records: List[Dict[str, Optional[str]]]):
     try:
         coll.data.insert_many(records)
     except Exception:
         for r in records:
-            try: coll.data.insert(r)
-            except Exception: pass
+            try:
+                coll.data.insert(r)
+            except Exception:
+                pass
+
 
 def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: str) -> Dict[str, int]:
     """Stream blobs under container/prefix, extract text, chunk, and upsert into Weaviate."""
@@ -284,8 +327,7 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
 
     total_blobs = total_chunks = success_files = failed_files = 0
     prog = st.progress(0.0)
-    # We iterate twice (once to count, once to process) to get better progress, but some backends disallow it.
-    # Here we just approximate with an incrementing counter.
+
     for i, blob in enumerate(container.list_blobs(name_starts_with=az.prefix), 1):
         total_blobs += 1
         prog.progress(min(0.99, i / (i + 1)))
@@ -293,7 +335,7 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
         try:
             data = container.download_blob(blob.name).readall()
             pairs = extract_text_from_blob(blob.name, data)
-            to_insert: List[Dict[str, Any]] = []
+            to_insert: List[Dict[str, Optional[str]]] = []
             file_chunks = 0
 
             for txt, meta in pairs:
@@ -303,7 +345,7 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
                         "title": os.path.basename(blob.name),
                         "source": meta.get("source"),
                         "path": meta.get("path"),
-                        "page": int(meta.get("page", 0)) if meta.get("page") else None,
+                        "page": int(meta["page"]) if meta.get("page") else None,  # INT field in schema
                         "block_id": f"{blob.name}#{j}",
                     })
                     file_chunks += 1
@@ -325,6 +367,7 @@ def ingest_azure_prefix_to_weaviate(client, az: AzureSettings, collection_name: 
         "chunks_upserted": total_chunks,
     }
 
+
 # =========================
 # Agent & hybrid search
 # =========================
@@ -338,7 +381,8 @@ def build_agent(client, collection_name: str):
         collections=[QueryAgentCollectionConfig(name=collection_name)],
     )
 
-def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, alpha: float = 0.5) -> List[Dict[str, Any]]:
+
+def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, alpha: float = 0.5) -> List[Dict[str, Optional[str]]]:
     try:
         coll = client.collections.get(collection_name)
     except Exception as e:
@@ -353,23 +397,26 @@ def hybrid_snippets(client, collection_name: str, query: str, top_k: int = 5, al
             return_metadata=["score", "distance"],
             return_properties=["text", "title", "source", "path", "page", "block_id"],
         )
-        items = []
+        items: List[Dict[str, Optional[str]]] = []
         for o in (res.objects or []):
             props = getattr(o, "properties", {}) or {}
             meta = getattr(o, "metadata", {}) or {}
+            score = meta.get("score")
+            # Normalize scalar types to str/float where useful
             items.append({
                 "text": props.get("text") or "",
                 "title": props.get("title") or "",
                 "source": props.get("source") or props.get("path") or "",
-                "page": props.get("page") or "",
+                "page": str(props.get("page") or ""),
                 "block_id": props.get("block_id") or "",
-                "score": meta.get("score"),
+                "score": float(score) if isinstance(score, (int, float)) else score,
                 "distance": meta.get("distance"),
             })
         return items
     except Exception as e:
         st.warning(f"Hybrid snippet fetch failed: {e}")
         return []
+
 
 # =========================
 # Streamlit UI
@@ -433,8 +480,9 @@ for m in st.session_state.messages:
 
 prompt = st.chat_input(f"Ask a question about the {wset.collection} KB…")
 
-def _render_snippets(snips: List[Dict[str, Any]]):
-    if not snips: return
+def _render_snippets(snips: List[Dict[str, Optional[str]]]):
+    if not snips:
+        return
     st.markdown("#### 🔎 Supporting snippets")
     for i, s in enumerate(snips, 1):
         score = s.get("score")
