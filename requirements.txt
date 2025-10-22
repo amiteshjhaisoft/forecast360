@@ -17,49 +17,51 @@ matplotlib
 plotly
 
 # ---------- File parsing / loaders used by RAG ----------
-pypdf                      # PyPDFLoader
-beautifulsoup4>=4.12       # BSHTMLLoader
-lxml>=4.9                  # parser for bs4
-docx2txt>=0.8              # Docx2txtLoader
-openpyxl                   # .xlsx
-xlrd==1.2.0                # legacy .xls (supports .xls in this version)
-# If you truly need .xlsb: pyxlsb
-# If you need ODS: odfpy
-# unstructured is powerful but heavy (system deps); leave commented unless needed:
-# unstructured[all-docs]>=0.15
-python-pptx>=0.6.23        # PPTX parsing (used by unstructured too)
-python-magic               # requires libmagic (on Windows use python-magic-bin)
+pypdf                       # PDF
+beautifulsoup4>=4.12        # HTML parsing
+lxml>=4.9                   # HTML/XML backend for bs4
+docx2txt>=0.8               # .docx
+openpyxl                    # .xlsx
+xlrd==1.2.0                 # legacy .xls
+python-pptx>=0.6.23         # .pptx
 PyYAML
+python-magic; platform_system!="Windows"
+python-magic-bin; platform_system=="Windows"
 
 # ---------- Classic ML / Stats ----------
 scikit-learn
 statsmodels
 scipy
 
-# ---------- LangChain / Vector ----------
-langchain-core>=0.2
-langchain-community>=0.2
-langchain-text-splitters>=0.2
-langchain-anthropic>=0.2
-langgraph>=0.2
-faiss-cpu>=1.8
-sentence-transformers>=3.0  # pulls torch; keep if you use local HF embeddings
+# ---------- LangChain / Agents / Vector ----------
+# Keep these aligned to the same minor to avoid import drift
+langchain>=0.2.14,<0.3
+langchain-core>=0.2.14,<0.3
+langchain-community>=0.2.14,<0.3
+langchain-text-splitters>=0.2.0,<0.3
+langchain-anthropic>=0.1.0
+langgraph>=0.2.0
+
+# Vector backends / embeddings
+faiss-cpu>=1.8; platform_system!="Windows"   # on Windows prefer Conda or skip
+# sentence-transformers pulls torch; include only if you really use local HF embeddings
+sentence-transformers>=3.0
 
 # ---------- Model SDKs ----------
 anthropic>=0.34
-langchain-openai>=0.2.0     # <-- bump to align with LC split packages
+langchain-openai>=0.2.0
 openai>=1.52.0
 
 # ---------- Azure Blob Storage ----------
 azure-storage-blob>=12.22.0
 azure-identity>=1.17.1
 
-# ---------- Optional (app models/features) ----------
-# These are heavy; keep only if you use them in production:
-pmdarima
-prophet                    # pulls cmdstanpy; needs a compiler toolchain
-tbats
-xgboost
-lightgbm
-darts                      # pulls torch & co.
-langsmith
+# ---------- Optional (only enable if needed) ----------
+# weaviate-client>=4.9.0        # If you use Weaviate in this app
+# pmdarima
+# prophet                       # heavy; needs compiler toolchain
+# tbats
+# xgboost
+# lightgbm
+# darts                         # heavy; pulls torch & lightning
+# langsmith
