@@ -99,12 +99,12 @@ def resolve_azure() -> AzureSettings:
     )
 
 def resolve_claude() -> ClaudeSettings:
-    return ClaudeSettings(
-        api_key=_get_secret("anthropic.api_key"),
-        model=_get_secret("anthropic.model", "claude-3-5-sonnet-latest") or "claude-3-5-sonnet-latest",
-        max_output_tokens=int(_get_secret("anthropic.max_output_tokens", "900")),
-        temperature=float(_get_secret("anthropic.temperature", "0.1")),
-    )
+    # allow env overrides as a fallback (esp. in Docker/CloudRun)
+    api_key = _get_secret("anthropic.api_key") or os.getenv("ANTHROPIC_API_KEY")
+    model = _get_secret("anthropic.model") or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+    max_output_tokens = int(_get_secret("anthropic.max_output_tokens", "900"))
+    temperature = float(_get_secret("anthropic.temperature", "0.1"))
+    return ClaudeSettings(api_key, model, max_output_tokens, temperature)
 
 
 # ---------- URL normalization (prevents :443 / whitespace issues) ----------
@@ -137,6 +137,7 @@ def _normalize_url(raw: str) -> str:
         raw = f"{scheme}://{raw}"
     parsed = _urlparse.urlsplit(raw)
     scheme = parsed.scheme.lower()
+    # strip default :443 or :80
     auth, host, port = _split_netloc_safe(parsed.netloc)
     if port and ((scheme == "https" and port == "443") or (scheme == "http" and port == "80")):
         port = None
@@ -454,6 +455,21 @@ with st.sidebar:
     st.subheader("Agent Mode")
     mode = st.radio("Response style", ["Q&A", "Decision Brief", "KPI Extraction"], index=0)
 
+    # Optional SAFE secrets health (enable with [debug] show_secrets_health=true in secrets.toml)
+    show_health = bool(st.secrets.get("debug", {}).get("show_secrets_health", False)) if "debug" in st.secrets else False
+    if show_health:
+        with st.expander("🔍 Secrets health (safe)"):
+            has_block = "anthropic" in st.secrets
+            has_key   = bool(st.secrets.get("anthropic", {}).get("api_key"))
+            has_model = bool(st.secrets.get("anthropic", {}).get("model"))
+            st.write({
+                "anthropic block present": has_block,
+                "anthropic.api_key present": has_key,
+                "anthropic.model present": has_model,
+                "ENV.ANTHROPIC_API_KEY present": bool(os.getenv("ANTHROPIC_API_KEY")),
+                "ENV.ANTHROPIC_MODEL present": bool(os.getenv("ANTHROPIC_MODEL")),
+            })
+
 # 1) Connect to Weaviate (hard-require)
 if "client" not in st.session_state or connect_clicked:
     try:
@@ -488,24 +504,25 @@ if ingest_clicked:
                 st.error(f"Ingest failed: {e}")
 
 # 4) Claude client (hard-require) + model self-check + reconnect
-if "claude" not in st.session_state or reconnect_claude:
-    c = resolve_claude()
-    st.session_state.claude = _claude_client(c)
-    if st.session_state.claude is not None:
-        # tiny ping to validate model id (catches typos like "4-5")
-        try:
-            _ = st.session_state.claude.messages.create(
-                model=c.model,
-                max_tokens=1,
-                messages=[{"role": "user", "content": "ping"}],
-            )
-        except Exception as e:
-            st.error(f"Claude model id '{c.model}' rejected by endpoint: {e}")
-            st.stop()
+def _build_and_ping_claude():
+    cfg = resolve_claude()
+    client = _claude_client(cfg)
+    if client is None:
+        raise RuntimeError("Anthropic SDK missing or API key not provided. Add [anthropic] api_key/model to secrets.")
+    # tiny ping to validate model id (catches typos like "4-5")
+    client.messages.create(
+        model=cfg.model,
+        max_tokens=1,
+        messages=[{"role": "user", "content": "ping"}],
+    )
+    return client, cfg
 
-if st.session_state.claude is None:
-    st.error("Claude (Anthropic) not configured. Add [anthropic] api_key/model to secrets, then click **Reconnect Claude**.")
-    st.stop()
+if "claude_client" not in st.session_state or reconnect_claude:
+    try:
+        st.session_state.claude_client, st.session_state.claude_cfg = _build_and_ping_claude()
+    except Exception as e:
+        st.error(f"Claude (Anthropic) not configured: {e}")
+        st.stop()
 
 # 5) Chat history memory
 if "messages" not in st.session_state:
@@ -575,8 +592,8 @@ if question:
                         snips = _mmr(raw, lam=0.7, k=min(w.top_k, len(raw)))
                         # Claude answer (strictly from snippets)
                         ans = answer_from_kb(
-                            claude=st.session_state.claude,
-                            cfg=resolve_claude(),
+                            claude=st.session_state.claude_client,
+                            cfg=st.session_state.claude_cfg,
                             question=question,
                             mode=mode,
                             history=st.session_state.messages[:-1],
