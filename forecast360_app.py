@@ -148,9 +148,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
 
-# ---- Embeddings / Observability (used in code)
-from langchain_community.embeddings import HuggingFaceEmbeddings  # optional at runtime
-from langsmith import Client as LangSmithClient  # optional; guarded usage
 
 
 
