@@ -158,7 +158,7 @@ def _normalize_weaviate_url(raw: str) -> str:
     Normalize a Weaviate URL with no default ports in the netloc.
     - Trims whitespace
     - Adds scheme if missing (https for cloud hosts, else http)
-    - Strips ':0' on https and ':80' on http
+    - Strips ':443' on https and ':80' on http
     - Preserves any non-default port (e.g., :8080)
     - Leaves default ports blank in the final URL
     """
@@ -177,7 +177,7 @@ def _normalize_weaviate_url(raw: str) -> str:
     auth, host, port_str = _split_netloc_safe(parsed.netloc)
 
     # Strip default ports only
-    if port_str and ((scheme == "https" and port_str == "0") or (scheme == "http" and port_str == "80")):
+    if port_str and ((scheme == "https" and port_str == "443") or (scheme == "http" and port_str == "80")):
         port_str = None
 
     # Rebuild netloc (no default port)
@@ -222,11 +222,9 @@ def connect_weaviate(url: str, api_key: Optional[str], timeout_s: int = 60):
     # Local/dev (http[s]://host[:port])
     parsed = _urlparse.urlsplit(url)
     host = (parsed.hostname or "localhost").strip()
-    # Don't read parsed.port here (it can raise on malformed); we already stripped default ports.
-    # If a non-default port was present, _split_netloc_safe would have kept it in the URL string.
-    # We'll re-extract the port safely from netloc again:
+    # Don't rely on parsed.port; re-split to avoid cast issues from malformed input
     _, _, port_str = _split_netloc_safe(parsed.netloc)
-    port = int(port_str) if port_str else 8080  # default runtime port for local connect
+    port = int(port_str) if port_str else 8080  # runtime default for local connect
     c = weaviate.connect_to_local(http_host=host, http_port=port)
     if not _verify(c):
         raise RuntimeError("Connected to Weaviate (local) but verification failed.")
