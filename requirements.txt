@@ -1,8 +1,3 @@
-# ---------- Core runtime ----------
-python-dotenv
-requests
-httpx
-
 # ---------- Streamlit app ----------
 streamlit>=1.33
 Pillow
@@ -10,58 +5,51 @@ Pillow
 # ---------- Data / compute ----------
 numpy
 pandas
-pyarrow
+pyarrow               # needed for pd.read_parquet even if not imported directly
+openpyxl              # .xlsx
+xlrd==1.2.0           # legacy .xls support (this pin supports .xls)
 
 # ---------- Visualization ----------
 matplotlib
-plotly
 
-# ---------- File parsing / loaders used by RAG ----------
-pypdf                       # PDF
-beautifulsoup4>=4.12        # HTML parsing
-lxml>=4.9                   # HTML/XML backend for bs4
-docx2txt>=0.8               # .docx
-openpyxl                    # .xlsx
-xlrd==1.2.0                 # legacy .xls
-python-pptx>=0.6.23         # .pptx
-PyYAML
-python-magic; platform_system!="Windows"
-python-magic-bin; platform_system=="Windows"
+# ---------- Azure Blob sync (used by kb_sync_azure.py) ----------
+azure-storage-blob>=12.22.0
+azure-identity>=1.17.1
 
-# ---------- Classic ML / Stats ----------
-scikit-learn
-statsmodels
-scipy
+# ---------- Optional: enable only if you use these features ----------
+# plotly                     # if you switch charts back to Plotly
+# python-dotenv             # if you load env vars from a .env file
+# requests
+# httpx
+# pypdf                     # PDF parsing
+# beautifulsoup4
+# lxml
+# python-pptx
+# docx2txt
+# PyYAML
+# python-magic; platform_system!="Windows"
+# python-magic-bin; platform_system=="Windows"
 
-# ---------- LangChain / Agents / Vector ----------
-# Keep these aligned to the same minor to avoid import drift
-# langchain>=0.2.14,<0.3
+# --- Time-series / ML (uncomment when models are wired in the UI) ---
+# scikit-learn
+# statsmodels
+# scipy
+# pmdarima
+# prophet                  # heavy; needs compiler toolchain
+# tbats
+# xgboost
+# lightgbm
+# darts                    # heavy; pulls torch & lightning
+
+# --- RAG / Vector / LLM (only if you actually use them) ---
 # langchain-core>=0.2.14,<0.3
 # langchain-community>=0.2.14,<0.3
 # langchain-text-splitters>=0.2.0,<0.3
 # langchain-anthropic>=0.1.0
 # langgraph>=0.2.0
-
-# Vector backends / embeddings
-faiss-cpu>=1.8; platform_system!="Windows"   # on Windows prefer Conda or skip
-# sentence-transformers pulls torch; include only if you really use local HF embeddings
-sentence-transformers>=3.0
-
-# ---------- Model SDKs ----------
-anthropic>=0.34
-# langchain-openai>=0.2.0
-# openai>=1.52.0
-
-# ---------- Azure Blob Storage ----------
-azure-storage-blob>=12.22.0
-azure-identity>=1.17.1
-
-# ---------- Optional (only enable if needed) ----------
-weaviate-client>=4.9.0        # If you use Weaviate in this app
-pmdarima
-prophet                       # heavy; needs compiler toolchain
-tbats
-xgboost
-lightgbm
-darts                         # heavy; pulls torch & lightning
-langsmith
+# faiss-cpu>=1.8; platform_system!="Windows"  # on Windows prefer Conda or skip
+# sentence-transformers>=3.0                  # pulls torch
+# torch                                      # CPU build is fine
+# anthropic>=0.34
+# weaviate-client>=4.9.0
+# langsmith
