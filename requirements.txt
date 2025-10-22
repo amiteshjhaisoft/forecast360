@@ -52,4 +52,6 @@ azure-identity>=1.17.1
 # torch                                      # CPU build is fine
 # anthropic>=0.34
 weaviate-client>=4.9.0
+weaviate-agents>=0.0.8
+
 # langsmith
