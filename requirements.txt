@@ -51,5 +51,5 @@ azure-identity>=1.17.1
 # sentence-transformers>=3.0                  # pulls torch
 # torch                                      # CPU build is fine
 # anthropic>=0.34
-# weaviate-client>=4.9.0
+weaviate-client>=4.9.0
 # langsmith
