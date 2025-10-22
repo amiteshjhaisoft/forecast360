@@ -98,7 +98,18 @@ except Exception:  # pragma: no cover
 from langchain_anthropic import ChatAnthropic
 
 # ---- Tools / Agents (optional)
-from langchain.tools import Tool
+# --- compatibility import for LangChain Tool ---
+try:
+    # Newer LangChain (>= 0.2.x)
+    from langchain_core.tools import Tool
+except Exception:
+    try:
+        # Mid-era
+        from langchain.tools import Tool
+    except Exception:
+        # Older LangChain
+        from langchain.agents import Tool
+
 from langchain.agents import AgentExecutor, create_react_agent
 
 # ---- Memory / History
