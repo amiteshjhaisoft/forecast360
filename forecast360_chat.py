@@ -13,9 +13,8 @@ import pandas as pd
 # ---------- Weaviate ----------
 import weaviate
 from weaviate.classes.init import Auth
-from weaviate.classes.config import Property, DataType, Configure
 
-# ---------- Azure Blob (optional, for ingest button) ----------
+# ---------- Azure Blob (optional, for ingest) ----------
 from azure.storage.blob import BlobServiceClient
 
 # ---------- Optional extractors for ingest ----------
@@ -69,10 +68,11 @@ class ClaudeSettings:
 
 
 def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
+    """Fetch from st.secrets (supports nested groups) with env fallback."""
     if "." in path:
-        group, key = path.split(".", 1)
+        grp, key = path.split(".", 1)
         try:
-            return st.secrets[group][key]
+            return st.secrets[grp][key]
         except Exception:
             pass
     try:
@@ -80,6 +80,7 @@ def _get_secret(path: str, default: Optional[str] = None) -> Optional[str]:
     except Exception:
         pass
     return os.environ.get(path.replace(".", "_").upper(), default)
+
 
 def resolve_weaviate() -> WeaviateSettings:
     return WeaviateSettings(
@@ -104,6 +105,7 @@ def resolve_claude() -> ClaudeSettings:
         max_output_tokens=int(_get_secret("anthropic.max_output_tokens", "900")),
         temperature=float(_get_secret("anthropic.temperature", "0.1")),
     )
+
 
 # ---------- URL normalization (prevents :443 / whitespace issues) ----------
 def _split_netloc_safe(netloc: str) -> Tuple[Optional[str], str, Optional[str]]:
@@ -143,6 +145,7 @@ def _normalize_url(raw: str) -> str:
         netloc = f"{auth}@{netloc}"
     return _urlparse.urlunsplit((scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
+
 # ---------- Connections ----------
 @st.cache_resource(show_spinner=False)
 def connect_weaviate(url: str, api_key: Optional[str]):
@@ -153,7 +156,10 @@ def connect_weaviate(url: str, api_key: Optional[str]):
         except Exception as e:
             raise RuntimeError(f"Weaviate verification failed: {e}")
     if any(m in url for m in CLOUD_MARKERS):
-        c = weaviate.connect_to_weaviate_cloud(cluster_url=url, auth_credentials=Auth.api_key(api_key) if api_key else None)
+        c = weaviate.connect_to_weaviate_cloud(
+            cluster_url=url,
+            auth_credentials=Auth.api_key(api_key) if api_key else None,
+        )
         _verify_or_raise(c)
         return c
     parsed = _urlparse.urlsplit(url)
@@ -179,7 +185,8 @@ def collection_doc_count(client, name: str) -> int:
     except Exception:
         return 0
 
-# ---------- Ingest (optional button) ----------
+
+# ---------- Ingest (optional) ----------
 def _blob_service(conn_str: str) -> BlobServiceClient:
     return BlobServiceClient.from_connection_string(conn_str)
 
@@ -189,7 +196,7 @@ def _extract_pairs(filename: str, content: bytes) -> List[Tuple[str, Dict[str, O
     def _as_utf8(b: bytes) -> str:
         try: return b.decode("utf-8")
         except Exception: return b.decode("latin-1", "ignore")
-    items = []
+    items: List[Tuple[str, Dict[str, Optional[str]]]] = []
     if name_l.endswith((".txt", ".md", ".log", ".csv", ".json")):
         if name_l.endswith(".json"):
             try:
@@ -204,10 +211,8 @@ def _extract_pairs(filename: str, content: bytes) -> List[Tuple[str, Dict[str, O
             reader = PdfReader(io.BytesIO(content))
             for i, page in enumerate(reader.pages, 1):
                 txt = page.extract_text() or ""
-                if txt.strip():
-                    items.append((txt, {**meta, "page": str(i)}))
-        except Exception:
-            pass
+                if txt.strip(): items.append((txt, {**meta, "page": str(i)}))
+        except Exception: pass
     elif name_l.endswith(".docx") and docx2txt:
         try:
             txt = docx2txt.process(io.BytesIO(content))
@@ -303,7 +308,6 @@ def _retrieve(client, collection: str, query: str, top_k: int, alpha: float) -> 
             objs = getattr(res, "objects", []) or []
         else:
             raise
-
     items: List[Dict[str, Optional[str]]] = []
     for o in objs:
         props = _props_to_dict(getattr(o, "properties", {}) or {})
@@ -322,7 +326,6 @@ def _retrieve(client, collection: str, query: str, top_k: int, alpha: float) -> 
     return [s for s in items if s["text"]]
 
 def _mmr(snips: List[Dict[str, Optional[str]]], lam: float = 0.7, k: int = 8) -> List[Dict[str, Optional[str]]]:
-    # Cheap MMR by string overlap (proxy). No external deps.
     def _sim(a: str, b: str) -> float:
         a_set = set(a.lower().split())
         b_set = set(b.lower().split())
@@ -332,7 +335,6 @@ def _mmr(snips: List[Dict[str, Optional[str]]], lam: float = 0.7, k: int = 8) ->
     if not snips: return []
     selected = []
     candidates = snips[:]
-    # normalize scores (higher is better)
     maxs = max((s["score"] or 0.0) for s in candidates) or 1.0
     for c in candidates:
         c["_norm"] = (c["score"] or 0.0) / maxs
@@ -405,8 +407,6 @@ def answer_from_kb(claude: anthropic.Anthropic, cfg: ClaudeSettings,
                    question: str, mode: str,
                    history: List[Dict[str, str]],
                    snips: List[Dict[str, Optional[str]]]) -> str:
-    if claude is None:
-        raise RuntimeError("Anthropic client not configured. Add [anthropic] api_key to secrets.")
     # compact chat history (no snippets) — last 6 turns
     trimmed = [{"role": m["role"], "content": m["content"]} for m in history[-12:]]
     sys = _system_prompt()
@@ -447,13 +447,14 @@ c = resolve_claude()
 # Sidebar actions
 with st.sidebar:
     st.subheader("Actions")
-    connect_clicked = st.button("🔌 Connect / Refresh", type="primary", use_container_width=True)
-    ingest_clicked = st.button("⬆️ Ingest Azure → Weaviate", use_container_width=True)
+    connect_clicked   = st.button("🔌 Connect / Refresh", type="primary", use_container_width=True)
+    ingest_clicked    = st.button("⬆️ Ingest Azure → Weaviate", use_container_width=True)
+    reconnect_claude  = st.button("🤝 Reconnect Claude", use_container_width=True)
 
     st.subheader("Agent Mode")
     mode = st.radio("Response style", ["Q&A", "Decision Brief", "KPI Extraction"], index=0)
 
-# 1) Connect (hard-require; no silent fallbacks)
+# 1) Connect to Weaviate (hard-require)
 if "client" not in st.session_state or connect_clicked:
     try:
         st.session_state.client = connect_weaviate(w.url, w.api_key)
@@ -461,7 +462,7 @@ if "client" not in st.session_state or connect_clicked:
         st.error(f"Could not connect to Weaviate: {e}")
         st.stop()
 
-# 2) Ensure collection is present and non-empty (hard-require)
+# 2) Ensure collection exists and check if it has content
 try:
     ensure_collection_exists(st.session_state.client, w.collection)
 except Exception as e:
@@ -470,12 +471,11 @@ except Exception as e:
 
 doc_count = collection_doc_count(st.session_state.client, w.collection)
 if doc_count <= 0:
-    st.error(f"Collection '{w.collection}' is empty. Please click **Ingest Azure → Weaviate** or populate it.")
-    # allow ingest even when empty
+    st.warning(f"Collection '{w.collection}' is empty. Click **Ingest Azure → Weaviate** to load knowledge.")
 else:
     st.success(f"Connected to collection '{w.collection}' with ~{doc_count} chunks.")
 
-# 3) Optional ingest button (kept simple)
+# 3) Optional ingest button
 if ingest_clicked:
     if not a.connection_string:
         st.error("Azure connection string missing in secrets.")
@@ -487,14 +487,27 @@ if ingest_clicked:
             except Exception as e:
                 st.error(f"Ingest failed: {e}")
 
-# 4) Claude client (hard-require; else stop)
-if "claude" not in st.session_state:
+# 4) Claude client (hard-require) + model self-check + reconnect
+if "claude" not in st.session_state or reconnect_claude:
+    c = resolve_claude()
     st.session_state.claude = _claude_client(c)
+    if st.session_state.claude is not None:
+        # tiny ping to validate model id (catches typos like "4-5")
+        try:
+            _ = st.session_state.claude.messages.create(
+                model=c.model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
+        except Exception as e:
+            st.error(f"Claude model id '{c.model}' rejected by endpoint: {e}")
+            st.stop()
+
 if st.session_state.claude is None:
-    st.error("Claude (Anthropic) not configured. Add [anthropic] api_key to secrets.")
+    st.error("Claude (Anthropic) not configured. Add [anthropic] api_key/model to secrets, then click **Reconnect Claude**.")
     st.stop()
 
-# 5) Memory (chat history)
+# 5) Chat history memory
 if "messages" not in st.session_state:
     st.session_state.messages: List[Dict[str, str]] = [
         {"role": "assistant", "content": "Hi! Ask anything about your Forecast360 knowledge base — models, metrics, seasonality, decisions."}
@@ -544,7 +557,6 @@ if question:
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        # guardrails
         g = _guard(question)
         if g:
             st.warning(g)
@@ -564,7 +576,7 @@ if question:
                         # Claude answer (strictly from snippets)
                         ans = answer_from_kb(
                             claude=st.session_state.claude,
-                            cfg=c,
+                            cfg=resolve_claude(),
                             question=question,
                             mode=mode,
                             history=st.session_state.messages[:-1],
