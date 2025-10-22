@@ -1,31 +1,141 @@
 # Author: Amitesh Jha | iSOFT
 
-from __future__ import annotations
+# from __future__ import annotations
+
+# # ---- Standard Library
+# import os
+# import sys
+# import io
+# import re
+# import json
+# import time
+# import base64
+# import hashlib
+# import logging
+# import shutil
+# import tempfile
+# from pathlib import Path
+# from dataclasses import dataclass
+# from typing import Any, Dict, List, Optional, Tuple, Union, Iterable, Literal
+# from datetime import datetime
+# import pytz
+
+# # ---- Environment / Config
+# from dotenv import load_dotenv
+
+# # ---- Web / IO utilities
+# import requests
+# import httpx
+
+# # ---- Streamlit UI
+# import streamlit as st
+
+# # ---- Core Data
+# import numpy as np
+# import pandas as pd
+# import pyarrow as pa
+
+# # ---- Visualization
+# import matplotlib.pyplot as plt
+# import plotly.express as px
+# import plotly.graph_objects as go
+# from PIL import Image
+
+# # ---- File Parsing / Ingestion
+# from pypdf import PdfReader
+# import openpyxl          # .xlsx reader
+# import xlrd              # .xls reader
+# # import pyxlsb          # .xlsb (enable if you actually use it)
+# import yaml
+# import csv
+# import zipfile
+
+# # ---- Classic ML / Stats
+# from sklearn.model_selection import train_test_split
+# from sklearn.metrics.pairwise import cosine_similarity
+# from sklearn.feature_extraction.text import TfidfVectorizer
+# import statsmodels.api as sm
+
+# # ===========================
+# # LangChain / LangGraph stack
+# # ===========================
+
+# # ---- LangChain Core
+# from langchain_core.documents import Document
+# from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+# from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain_core.runnables import (
+#     Runnable,
+#     RunnableMap,
+#     RunnableLambda,
+#     RunnableParallel,
+# )
+# from langchain_core.callbacks import BaseCallbackHandler
+
+# # ---- Text Splitters & Loaders (only those that match installed deps)
+# from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_community.document_loaders import (
+#     PyPDFLoader,
+#     TextLoader,
+#     CSVLoader,
+#     JSONLoader,
+#     # UnstructuredExcelLoader,          # requires 'unstructured' (not installed)
+#     # UnstructuredHTMLLoader,           # requires 'unstructured' (not installed)
+# )
+
+# # ---- Vector Store (FAISS) & Embeddings
+# from langchain_community.vectorstores import FAISS
+
+# # Guarded: HuggingFaceEmbeddings typically needs sentence-transformers/torch.
+# # Keep optional so import doesn't crash if those aren't installed.
+# try:
+#     from langchain_community.embeddings import HuggingFaceEmbeddings  # optional
+# except Exception:  # pragma: no cover
+#     HuggingFaceEmbeddings = None  # type: ignore
+
+# # ---- Claude (only) LLM
+# from langchain_anthropic import ChatAnthropic
+
+# # ---- Tools / Agents (optional)
+# # --- compatibility import for LangChain Tool ---
+# try:
+#     # Newer LangChain (>= 0.2.x)
+#     from langchain_core.tools import Tool
+# except Exception:
+#     try:
+#         # Mid-era
+#         from langchain.tools import Tool
+#     except Exception:
+#         # Older LangChain
+#         from langchain.agents import Tool
+
+# # from langchain.agents import AgentExecutor, create_react_agent
+
+# # ---- Memory / History
+# from langchain.memory import ChatMessageHistory
+# from langchain_core.chat_history import BaseChatMessageHistory
+# from langchain_core.runnables.history import RunnableWithMessageHistory
+
+# # ---- LangGraph (state graph for agents / workflows)
+# from langgraph.graph import StateGraph, END
+# from langgraph.checkpoint.memory import MemorySaver
+
+# # ---- Tracing / Observability (optional)
+# try:
+#     from langsmith import Client as LangSmithClient
+# except Exception:
+#     LangSmithClient = None  # type: ignore
 
 # ---- Standard Library
 import os
-import sys
 import io
 import re
 import json
-import time
 import base64
-import hashlib
-import logging
-import shutil
-import tempfile
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable, Literal
+from typing import Any, Dict, Optional
 from datetime import datetime
-import pytz
-
-# ---- Environment / Config
-from dotenv import load_dotenv
-
-# ---- Web / IO utilities
-import requests
-import httpx
 
 # ---- Streamlit UI
 import streamlit as st
@@ -33,99 +143,16 @@ import streamlit as st
 # ---- Core Data
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 
 # ---- Visualization
 import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
 from PIL import Image
 
-# ---- File Parsing / Ingestion
-from pypdf import PdfReader
-import openpyxl          # .xlsx reader
-import xlrd              # .xls reader
-# import pyxlsb          # .xlsb (enable if you actually use it)
-import yaml
-import csv
-import zipfile
+# ---- Embeddings / Observability (used in code)
+from langchain_community.embeddings import HuggingFaceEmbeddings  # optional at runtime
+from langsmith import Client as LangSmithClient  # optional; guarded usage
 
-# ---- Classic ML / Stats
-from sklearn.model_selection import train_test_split
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.feature_extraction.text import TfidfVectorizer
-import statsmodels.api as sm
 
-# ===========================
-# LangChain / LangGraph stack
-# ===========================
-
-# ---- LangChain Core
-from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import (
-    Runnable,
-    RunnableMap,
-    RunnableLambda,
-    RunnableParallel,
-)
-from langchain_core.callbacks import BaseCallbackHandler
-
-# ---- Text Splitters & Loaders (only those that match installed deps)
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-    CSVLoader,
-    JSONLoader,
-    # UnstructuredExcelLoader,          # requires 'unstructured' (not installed)
-    # UnstructuredHTMLLoader,           # requires 'unstructured' (not installed)
-)
-
-# ---- Vector Store (FAISS) & Embeddings
-from langchain_community.vectorstores import FAISS
-
-# Guarded: HuggingFaceEmbeddings typically needs sentence-transformers/torch.
-# Keep optional so import doesn't crash if those aren't installed.
-try:
-    from langchain_community.embeddings import HuggingFaceEmbeddings  # optional
-except Exception:  # pragma: no cover
-    HuggingFaceEmbeddings = None  # type: ignore
-
-# ---- Claude (only) LLM
-from langchain_anthropic import ChatAnthropic
-
-# ---- Tools / Agents (optional)
-# --- compatibility import for LangChain Tool ---
-try:
-    # Newer LangChain (>= 0.2.x)
-    from langchain_core.tools import Tool
-except Exception:
-    try:
-        # Mid-era
-        from langchain.tools import Tool
-    except Exception:
-        # Older LangChain
-        from langchain.agents import Tool
-
-# from langchain.agents import AgentExecutor, create_react_agent
-
-# ---- Memory / History
-from langchain.memory import ChatMessageHistory
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.runnables.history import RunnableWithMessageHistory
-
-# ---- LangGraph (state graph for agents / workflows)
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-
-# ---- Tracing / Observability (optional)
-try:
-    from langsmith import Client as LangSmithClient
-except Exception:
-    LangSmithClient = None  # type: ignore
 
 from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
