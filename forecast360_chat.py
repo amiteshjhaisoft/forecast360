@@ -406,7 +406,7 @@ class Forecast360Agent:
     def respond(self, user_q: str) -> str:
         ql = user_q.strip().lower()
         if re.fullmatch(r"(hi|hello|hey|greetings|good (morning|afternoon|evening))[\W_]*", ql or ""):
-            return ("Hello! We’re the Forecast360 AI Agent. Ask us about forecasting models, pipelines, dashboards, "
+            return ("Hello! I am Forecast360 AI Agent. Ask me about forecasting models, pipelines, dashboards, "
                     "accuracy metrics, or Azure integrations — we’ll answer using our knowledge base.")
         try:
             return self._answer(user_q)
