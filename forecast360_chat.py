@@ -437,60 +437,6 @@ with c2:
     st.markdown("### Forecast360 AI Agent")
     st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
 
-# Connect to Weaviate
-if "f360_client" not in st.session_state:
-    with st.spinner("Connecting to the Forecast360 knowledge base…"):
-        try:
-            st.session_state["f360_client"] = _connect_weaviate()
-        except Exception as e:
-            st.error(f"⚠️ Weaviate configuration error: {e}")
-            st.stop()
-
-agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
-
-# Initial assistant message (only once)
-if not st.session_state["messages"]:
-    st.session_state["messages"].append({
-        "role":"assistant",
-        "content":"Hello! I’m your Forecast360 AI Agent. How can I help today?"
-    })
-
-# Render chat history
-for m in st.session_state["messages"]:
-    avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
-    with st.chat_message(m["role"], avatar=avatar):
-        st.markdown(m["content"])
-
-# Process queued query (if any)
-if "pending_query" in st.session_state:
-    pq = st.session_state.pop("pending_query")
-    st.session_state["messages"].append({"role":"user","content":pq})
-    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
-        st.markdown(pq)
-    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-        # keep UI unchanged; optionally rotate a richer loading phrase
-        loading_msg = random.choice(PROMPTS["loading"])
-        with st.spinner(loading_msg):
-            reply = agent.respond(pq)
-        st.markdown(reply)
-    st.session_state["messages"].append({"role":"assistant","content":reply})
-    st.rerun()
-
-# Chat input
-user_q = st.chat_input("Ask me...", key="chat_box")
-if user_q:
-    st.session_state["messages"].append({"role":"user","content":user_q})
-    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
-        st.markdown(user_q)
-    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-        loading_msg = random.choice(PROMPTS["loading"])
-        with st.spinner(loading_msg):
-            reply = agent.respond(user_q)
-        st.markdown(reply)
-    st.session_state["messages"].append({"role":"assistant","content":reply})
-    st.rerun()
-
-
 # --- KB Refresh (Azure Blob -> Weaviate) ---
 with st.container():
     st.markdown("""
@@ -546,4 +492,61 @@ with st.container():
     # close the flex container
     st.markdown("</span></div>", unsafe_allow_html=True)
 #-------------------------------------------------------------------
+    
+
+# Connect to Weaviate
+if "f360_client" not in st.session_state:
+    with st.spinner("Connecting to the Forecast360 knowledge base…"):
+        try:
+            st.session_state["f360_client"] = _connect_weaviate()
+        except Exception as e:
+            st.error(f"⚠️ Weaviate configuration error: {e}")
+            st.stop()
+
+agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
+
+# Initial assistant message (only once)
+if not st.session_state["messages"]:
+    st.session_state["messages"].append({
+        "role":"assistant",
+        "content":"Hello! I’m your Forecast360 AI Agent. How can I help today?"
+    })
+
+# Render chat history
+for m in st.session_state["messages"]:
+    avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
+    with st.chat_message(m["role"], avatar=avatar):
+        st.markdown(m["content"])
+
+# Process queued query (if any)
+if "pending_query" in st.session_state:
+    pq = st.session_state.pop("pending_query")
+    st.session_state["messages"].append({"role":"user","content":pq})
+    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
+        st.markdown(pq)
+    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        # keep UI unchanged; optionally rotate a richer loading phrase
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
+            reply = agent.respond(pq)
+        st.markdown(reply)
+    st.session_state["messages"].append({"role":"assistant","content":reply})
+    st.rerun()
+
+# Chat input
+user_q = st.chat_input("Ask me...", key="chat_box")
+if user_q:
+    st.session_state["messages"].append({"role":"user","content":user_q})
+    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
+        st.markdown(user_q)
+    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
+            reply = agent.respond(user_q)
+        st.markdown(reply)
+    st.session_state["messages"].append({"role":"assistant","content":reply})
+    st.rerun()
+
+
+
 
