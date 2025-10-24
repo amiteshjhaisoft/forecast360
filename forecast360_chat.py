@@ -434,6 +434,85 @@ class Forecast360Agent:
             return ("Sorry, something went wrong while processing your request. "
                     "Please try again in a moment.")
 
+# ============================ Streamlit UI (same look & feel) ============================
+
+st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
+
+st.markdown("""
+<style>
+.stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
+.stButton>button:hover { background-color: #007bff; color: white; }
+.bottom-actions .stButton>button {
+    width: 42px; min-width: 42px; height: 42px; min-height: 42px;
+    padding: 0; border-radius: 12px; font-size: 18px;
+}
+.bottom-actions { margin-top: 6px; }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+c1, c2 = st.columns([1, 8], vertical_alignment="center")
+with c1: st.image(ASSISTANT_ICON, width=80)
+with c2:
+    st.markdown("### Forecast360 AI Agent")
+    st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
+
+# --- KB Refresh (Azure Blob -> Weaviate) ---
+with st.container():
+    st.markdown("""
+    <style>
+    .kb-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+    }
+    .kb-caption {
+        font-size: 0.9rem;
+        color: var(--text-color-secondary,#6b6f76);
+        white-space: nowrap;
+    }
+    .kb-refresh-btn button {
+        width: 26px; height: 26px;
+        min-width: 26px; min-height: 26px;
+        padding: 0; border-radius: 6px;
+        font-size: 14px; line-height: 1;
+    }
+    </style>
+    <div class="kb-row">
+      <span class="kb-caption">
+        Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
+      </span>
+      <span class="kb-refresh-btn">""", unsafe_allow_html=True)
+
+    # The button itself
+    if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
+        with st.spinner("Refreshing knowledge base…"):
+            try:
+                stats = sync_from_azure(
+                    st_secrets=st.secrets,
+                    collection_name=COLLECTION_NAME,
+                    container_key="container",
+                    prefix_key="prefix",
+                    embed_model_key=("rag", "embed_model"),
+                    delete_before_upsert=True,
+                    max_docs=None,
+                )
+                st.success(
+                    f"Done. Files: {stats['processed_files']} | "
+                    f"Chunks: {stats['inserted_chunks']} | "
+                    f"Cleared: {stats['cleared_sources']} | "
+                    f"Skipped: {stats['skipped_files']}"
+                    + (f" | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
+                )
+                st.toast("Knowledge base refreshed.")
+            except Exception as e:
+                st.error(f"KB refresh failed: {e}")
+
+    # close the flex container
+    st.markdown("</span></div>", unsafe_allow_html=True)
+#-------------------------------------------------------------------
+
 # Connect to Weaviate
 if "f360_client" not in st.session_state:
     with st.spinner("Connecting to the Forecast360 knowledge base…"):
@@ -486,88 +565,3 @@ if user_q:
         st.markdown(reply)
     st.session_state["messages"].append({"role":"assistant","content":reply})
     st.rerun()
-
-
-    
-# ============================ Streamlit UI (same look & feel) ============================
-def run():
-    st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
-    
-    st.markdown("""
-    <style>
-    .stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
-    .stButton>button:hover { background-color: #007bff; color: white; }
-    .bottom-actions .stButton>button {
-        width: 42px; min-width: 42px; height: 42px; min-height: 42px;
-        padding: 0; border-radius: 12px; font-size: 18px;
-    }
-    .bottom-actions { margin-top: 6px; }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Header
-    c1, c2 = st.columns([1, 8], vertical_alignment="center")
-    with c1: st.image(ASSISTANT_ICON, width=80)
-    with c2:
-        st.markdown("### Forecast360 AI Agent")
-        st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
-    
-    # --- KB Refresh (Azure Blob -> Weaviate) ---
-    with st.container():
-        st.markdown("""
-        <style>
-        .kb-row {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 6px;
-        }
-        .kb-caption {
-            font-size: 0.9rem;
-            color: var(--text-color-secondary,#6b6f76);
-            white-space: nowrap;
-        }
-        .kb-refresh-btn button {
-            width: 26px; height: 26px;
-            min-width: 26px; min-height: 26px;
-            padding: 0; border-radius: 6px;
-            font-size: 14px; line-height: 1;
-        }
-        </style>
-        <div class="kb-row">
-          <span class="kb-caption">
-            Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
-          </span>
-          <span class="kb-refresh-btn">""", unsafe_allow_html=True)
-    
-        # The button itself
-        if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
-            with st.spinner("Refreshing knowledge base…"):
-                try:
-                    stats = sync_from_azure(
-                        st_secrets=st.secrets,
-                        collection_name=COLLECTION_NAME,
-                        container_key="container",
-                        prefix_key="prefix",
-                        embed_model_key=("rag", "embed_model"),
-                        delete_before_upsert=True,
-                        max_docs=None,
-                    )
-                    st.success(
-                        f"Done. Files: {stats['processed_files']} | "
-                        f"Chunks: {stats['inserted_chunks']} | "
-                        f"Cleared: {stats['cleared_sources']} | "
-                        f"Skipped: {stats['skipped_files']}"
-                        + (f" | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
-                    )
-                    st.toast("Knowledge base refreshed.")
-                except Exception as e:
-                    st.error(f"KB refresh failed: {e}")
-    
-        # close the flex container
-        st.markdown("</span></div>", unsafe_allow_html=True)
-#-------------------------------------------------------------------
-
-# allow “from forecast360_chat import run” in a parent app
-if __name__ == "__main__":
-    run()
