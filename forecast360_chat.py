@@ -23,7 +23,8 @@ except Exception:
 import weaviate
 import weaviate.classes as wvc
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
-from kb_sync_azure import azure_sync_weaviate
+
+from azure_sync_weaviate import sync_from_azure
 
 # ============================ Configuration ============================
 
