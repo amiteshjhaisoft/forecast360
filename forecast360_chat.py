@@ -493,38 +493,34 @@ if user_q:
 
 # --- KB Refresh (Azure Blob -> Weaviate) ---
 with st.container():
-    # scoped styles
     st.markdown("""
     <style>
-    .kb-row { display:flex; align-items:center; gap:10px; }
-    .kb-caption { color: var(--text-color-secondary,#6b6f76); font-size:0.9rem; white-space:nowrap; }
-    .kb-btn .stButton>button {
-        width: 26px; height: 26px; min-width: 26px; min-height: 26px;
-        padding: 0; border-radius: 6px; font-size: 14px; line-height: 1;
+    .kb-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
     }
-    .kb-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-    .kb-chip {
-        background: #e7f7ee; color: #147d3f; border: 1px solid #b8ebcf;
-        padding: 2px 8px; border-radius: 999px; font-size: 0.85rem;
+    .kb-caption {
+        font-size: 0.9rem;
+        color: var(--text-color-secondary,#6b6f76);
+        white-space: nowrap;
     }
-    @media(max-width: 860px){
-      .kb-caption { max-width: 52vw; overflow:hidden; text-overflow:ellipsis; }
+    .kb-refresh-btn button {
+        width: 26px; height: 26px;
+        min-width: 26px; min-height: 26px;
+        padding: 0; border-radius: 6px;
+        font-size: 14px; line-height: 1;
     }
     </style>
-    """, unsafe_allow_html=True)
+    <div class="kb-row">
+      <span class="kb-caption">
+        Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
+      </span>
+      <span class="kb-refresh-btn">""", unsafe_allow_html=True)
 
-    # row: caption | button | chips (filled after run)
-    left, mid, right = st.columns([1.0, 0.06, 0.6], vertical_alignment="center")
-    with left:
-        st.markdown('<div class="kb-caption">Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)</div>', unsafe_allow_html=True)
-
-    with mid:
-        # icon-only tiny button
-        clicked = st.button("🔄", key="refresh_kb", help="Refresh knowledge base", use_container_width=True)
-
-    chips_slot = right.empty()
-
-    if clicked:
+    # The button itself
+    if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
         with st.spinner("Refreshing knowledge base…"):
             try:
                 stats = sync_from_azure(
@@ -536,20 +532,18 @@ with st.container():
                     delete_before_upsert=True,
                     max_docs=None,
                 )
-                chips_html = f"""
-                <div class="kb-chips">
-                  <span class="kb-chip">Done</span>
-                  <span class="kb-chip">Files: {stats['processed_files']}</span>
-                  <span class="kb-chip">Chunks: {stats['inserted_chunks']}</span>
-                  <span class="kb-chip">Cleared: {stats['cleared_sources']}</span>
-                  <span class="kb-chip">Skipped: {stats['skipped_files']}</span>
-                  {f"<span class='kb-chip'>Embeddings: {stats['used_embed_model']}</span>" if stats.get("vectorizer_none") else ""}
-                </div>
-                """
-                chips_slot.markdown(chips_html, unsafe_allow_html=True)
+                st.success(
+                    f"Done. Files: {stats['processed_files']} | "
+                    f"Chunks: {stats['inserted_chunks']} | "
+                    f"Cleared: {stats['cleared_sources']} | "
+                    f"Skipped: {stats['skipped_files']}"
+                    + (f" | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
+                )
                 st.toast("Knowledge base refreshed.")
             except Exception as e:
-                chips_slot.empty()
                 st.error(f"KB refresh failed: {e}")
+
+    # close the flex container
+    st.markdown("</span></div>", unsafe_allow_html=True)
 #-------------------------------------------------------------------
 
