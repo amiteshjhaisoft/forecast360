@@ -2777,28 +2777,22 @@ def page_getting_started():
 # at top of file
 from forecast360_chat import run as run_ai_agent
 
+# at top
+from forecast360_chat import run as run_ai_agent
+
 # --- app render ---
 if st.session_state.get("show_sidebar"):
-    # Sidebar
     try:
         sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-    # Main page with two tabs
-    tab_home, tab_agent = st.tabs(["Home", "AI Agent"])
+    view = st.sidebar.radio("View", ["Home", "AI Agent"], index=0)
 
-    with tab_home:
-        try:
-            page_getting_started()  # your existing Home page
-        except Exception as e:
-            st.error(f"Error rendering Getting Started: {e}")
-
-    with tab_agent:
-        try:
-            run_ai_agent()  # renders the chat app
-        except Exception as e:
-            st.error(f"Error rendering AI Agent: {e}")
-
-
-
+    try:
+        if view == "Home":
+            page_getting_started()
+        else:
+            run_ai_agent()
+    except Exception as e:
+        st.error(f"Error rendering {view}: {e}")
