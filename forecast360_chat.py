@@ -1,6 +1,6 @@
 # Author: Amitesh Jha | iSoft
 # Forecast360 AI Agent — Strict RAG (Weaviate collection: Forecast360) → (optional) Claude
-# v4 Weaviate client compatible
+# Weaviate v3 client compatible
 
 from __future__ import annotations
 import os, re, json, itertools
@@ -18,9 +18,11 @@ try:
 except Exception:
     CrossEncoder = None
 
-# --- Weaviate v4 client (Collections API) ---
-from weaviate import connect_to_weaviate_cloud, AuthApiKey
-from weaviate.collections.classes.query import MetadataQuery
+# --- Weaviate v3 client ---
+try:
+    import weaviate
+except ImportError:
+    weaviate = None  # we'll error nicely later
 
 
 # ============================ Configuration ============================
@@ -52,22 +54,36 @@ PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
 
 # ============================ Helpers ============================
 
-def _connect_weaviate():
-    if not WEAVIATE_URL:
-        raise RuntimeError("Set [weaviate].url in secrets.")
-    auth = AuthApiKey(api_key=WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
-    client = connect_to_weaviate_cloud(
-        cluster_url=WEAVIATE_URL,
-        auth_credentials=auth,
-        timeout=(15, 120),
-    )
-    # quick check: make sure the collection exists
-    try:
-        _ = client.collections.get(COLLECTION_NAME)
-    except Exception as e:
-        raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or client unreachable: {e}")
-    return client
+def _normalize_weaviate_url(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = "http://" + raw
+    return raw.rstrip("/")
 
+def _connect_weaviate() -> Any:
+    if not weaviate:
+        raise RuntimeError("Missing dependency: install 'weaviate-client>=3.25,<4'.")
+    url = _normalize_weaviate_url(WEAVIATE_URL)
+    if not url:
+        raise RuntimeError("Set [weaviate].url in .streamlit/secrets.toml")
+    auth = weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+    client = weaviate.Client(
+        url=url,
+        auth_client_secret=auth,
+        timeout_config=(15, 120),
+        startup_period=45,
+    )
+    # Health check & collection presence
+    try:
+        schema = client.schema.get() or {}
+        classes = [c.get("class") for c in schema.get("classes", [])]
+        if COLLECTION_NAME not in classes:
+            raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found in schema.")
+    except Exception as e:
+        raise RuntimeError(f"Weaviate not reachable/healthy: {e}")
+    return client
 
 @st.cache_resource(show_spinner=False)
 def _load_embed_model(name: str) -> SentenceTransformer:
@@ -85,46 +101,42 @@ def _load_reranker():
 RERANKER = _load_reranker()
 
 
-# ============= Introspective schema helpers (v4 Collections) =============
+# ============= Introspective schema helpers (v3 schema dict) =============
 
 def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
     """
-    Infer the main text field and an optional source/url-like field using v4 collection config.
-    Prefers names: text/content/body/chunk for text; url/source/page/path/file/document/uri for source.
-    Falls back to ("text","url") if unknown.
+    Infer main text field and optional source/url-like field from v3 schema.
+    Prefers: text/content/body/chunk (text) and url/source/page/path/file/document/uri (source).
     """
-    text_field = None
-    source_field = None
     try:
-        coll = client.collections.get(class_name)
-        cfg = coll.config.get()  # CollectionConfig
-        props = getattr(cfg, "properties", []) or []
-        names = [getattr(p, "name", "") for p in props]
+        sch = client.schema.get() or {}
+        for c in sch.get("classes", []):
+            if (c.get("class") or "").strip() == class_name:
+                props = c.get("properties", []) or []
+                names = [p.get("name","") for p in props]
 
-        # text-like
-        for cand in ["text","content","body","chunk","passage","document","value"]:
-            if cand in names:
-                text_field = cand
-                break
-        if not text_field:
-            # fallback to any property whose data type includes 'text'
-            for p in props:
-                dts = [str(dt).lower() for dt in (getattr(p, "data_type", []) or [])]
-                if any("text" in dt for dt in dts):
-                    text_field = getattr(p, "name", None)
-                    if text_field: break
+                text_field = None
+                for n in ["text","content","body","chunk","passage","document","value"]:
+                    if n in names:
+                        text_field = n; break
+                if not text_field:
+                    for p in props:
+                        dts = [dt.lower() for dt in (p.get("dataType") or [])]
+                        if "text" in dts:
+                            text_field = p.get("name"); break
 
-        # source-like
-        for cand in ["url","source","page","path","file","document","uri"]:
-            if cand in names:
-                source_field = cand
-                break
+                source_field = None
+                for n in ["url","source","page","path","file","document","uri"]:
+                    if n in names:
+                        source_field = n; break
+
+                return (text_field or "text", source_field)
     except Exception:
         pass
-    return (text_field or "text", source_field)
+    return "text", "url"
 
 
-# ============================ Retrieval (v4) ============================
+# ============================ Retrieval (v3) ============================
 
 def _sent_split(text: str) -> List[str]:
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -166,85 +178,51 @@ def _apply_reranker(query: str, candidates: List[Dict[str,Any]], topk: int) -> L
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return candidates[:topk]
 
-def _collect_from_objects(objs, text_field: str, source_field: Optional[str]) -> List[Dict[str,Any]]:
-    out: List[Dict[str,Any]] = []
-    if not objs:
-        return out
-    for o in objs:
-        props = getattr(o, "properties", {}) or {}
-        text_val = str(props.get(text_field, "") or "")
-        if not text_val.strip():
-            continue
-        src_val = str(props.get(source_field, "") or "") if source_field else ""
-        # distance/score if provided by query type
-        md = getattr(o, "metadata", None)
-        score_val = None
-        if md is not None:
-            # distance (near_vector) -> convert to similarity
-            dist = getattr(md, "distance", None)
-            if isinstance(dist, (int, float)):
-                score_val = 1.0 - float(dist)  # rough similarity
-            # score (hybrid/bm25)
-            sc = getattr(md, "score", None)
-            if isinstance(sc, (int, float)) and (score_val is None or sc > score_val):
-                score_val = float(sc)
-        out.append({"text": text_val, "source": src_val, "score": score_val or 0.0})
-    return out
-
 def _search_weaviate(client: Any, class_name: str, text_field: str, source_field: Optional[str],
                      embedder: SentenceTransformer, query: str, k: int) -> List[Dict[str,Any]]:
     """
-    v4 query flow: near_vector → hybrid → bm25
+    v3 query flow: near-vector → hybrid → bm25
+    Note: we request _additional.distance and convert to a similarity ~ (1 - distance).
     """
-    want = max(k, 24)
-    coll = client.collections.get(class_name)
+    qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32").tolist()
+    fields = [text_field]
+    if source_field:
+        fields.append(source_field)
 
-    # Prepare query vector
-    qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32")
-    qv_list = qv.tolist()
+    base = client.query.get(class_name, fields).with_additional(["distance"])
+
+    def _run(build):
+        try:
+            res = build.do()
+            return res["data"]["Get"].get(class_name, [])
+        except Exception:
+            return []
+
+    want = max(k, 24)
 
     # 1) near-vector
-    try:
-        res = coll.query.near_vector(
-            near_vector=qv_list,
-            limit=want,
-            return_metadata=MetadataQuery(distance=True)
-        )
-        hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits:
-            return hits
-    except Exception:
-        pass
-
+    hits = _run(base.with_near_vector({"vector": qv}).with_limit(want))
     # 2) hybrid (vector + keyword)
-    try:
-        res = coll.query.hybrid(
-            query=query,
-            vector=qv_list,
-            alpha=0.6,
-            limit=want,
-            return_metadata=MetadataQuery(score=True)
-        )
-        hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits:
-            return hits
-    except Exception:
-        pass
-
+    if not hits:
+        hits = _run(base.with_hybrid(query=query, vector=qv, alpha=0.6).with_limit(want))
     # 3) bm25 fallback
-    try:
-        res = coll.query.bm25(
-            query=query,
-            limit=want,
-            return_metadata=MetadataQuery(score=True)
-        )
-        hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits:
-            return hits
-    except Exception:
-        pass
+    if not hits:
+        hits = _run(base.with_bm25(query=query).with_limit(want))
 
-    return []
+    out = []
+    for h in hits:
+        add = h.get("_additional", {}) or {}
+        dist = add.get("distance", None)
+        # similarity rough mapping for cosine distance (sim ≈ 1 - dist)
+        score = None
+        if isinstance(dist, (int, float)):
+            score = 1.0 - float(dist)
+        text_val = h.get(text_field, "") or ""
+        src_val  = h.get(source_field, "") if source_field else ""
+        if not str(text_val).strip():
+            continue
+        out.append({"text": str(text_val), "source": str(src_val or ""), "score": score if score is not None else 0.0})
+    return out
 
 def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[Dict[str,Any]]:
     model = _load_embed_model(EMB_MODEL_NAME)
@@ -321,23 +299,17 @@ class Forecast360Agent:
         if "messages" not in st.session_state: st.session_state["messages"] = []
 
     def _answer(self, user_q: str) -> str:
-        # retrieve
         hits = retrieve(self.client, self.class_name, user_q, TOP_K)
         if not hits:
             return ("We couldn’t find that detail in the Forecast360 knowledge base. "
                     "Please rephrase or ask about a different topic.")
-        # extract best lines
         texts = [h["text"] for h in hits]
-        excerpts = _best_extract_sentences(user_q, texts, max_pick=6)
-        if not excerpts:
-            excerpts = texts[:6]
+        excerpts = _best_extract_sentences(user_q, texts, max_pick=6) or texts[:6]
 
-        # LLM synthesis (if available)
         llm_ans = _anthropic_answer(user_q, excerpts)
         if llm_ans:
             return llm_ans
 
-        # Fallback: bullet points from context (no citations)
         parts = ["Here’s what we can confirm from our knowledge base:"]
         parts += [f"- {ex}" for ex in excerpts]
         return "\n".join(parts)
