@@ -25,7 +25,6 @@ from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
 from azure_sync_weaviate import sync_from_azure
 
-
 # ============================ Configuration ============================
 
 def _sget(section: str, key: str, default: Any = None) -> Any:
@@ -33,6 +32,10 @@ def _sget(section: str, key: str, default: Any = None) -> Any:
         return st.secrets[section].get(key, default)  # type: ignore
     except Exception:
         return default
+
+# from rag_helpers import retrieve as f360_retrieve
+# from rag_helpers import best_extract_sentences as f360_best_extract
+# from rag_helpers import load_reranker as f360_load_reranker
 
 WEAVIATE_URL     = _sget("weaviate", "url", "")
 WEAVIATE_API_KEY = _sget("weaviate", "api_key", "")
@@ -51,7 +54,6 @@ ASSISTANT_ICON = _sget("ui", "assistant_icon", "assets/forecast360.png")
 USER_ICON      = _sget("ui", "user_icon", "assets/avatar.png")
 PAGE_ICON      = _sget("ui", "page_icon", "assets/forecast360.png")
 PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
-
 
 # ============================ Prompts (Domain-Focused) ============================
 
@@ -108,9 +110,9 @@ PROMPTS = {
     ],
 }
 
+# Backward-compatible minimal prompts (kept for fallback)
 COMPANY_RULES = PROMPTS["system"]
 SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
-
 
 # ============================ Helpers ============================
 
@@ -152,23 +154,26 @@ def _load_reranker():
 
 RERANKER = _load_reranker()
 
-
 # ============= Introspective schema helpers (v4 Collections) =============
 
 def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
     """
     Pick the main text field and an optional source/url-like field.
 
-    You can override via secrets:
-      [weaviate]
-      text_property   = "content"
-      source_property = "source_path"
+    • You can force the property names via Streamlit secrets:
+        [weaviate]
+        text_property   = "content"        # REQUIRED if your schema doesn't use 'text'
+        source_property = "source_path"    # OPTIONAL
+
+    • If not forced, we fall back to schema introspection + heuristics.
     """
+    # --- secrets-based override (preferred if set) ---
     forced_text = _sget("weaviate", "text_property", None)
     forced_src  = _sget("weaviate", "source_property", None)
     if forced_text:
         return forced_text, forced_src
 
+    # --- heuristic fallback via schema inspection ---
     text_field: Optional[str] = None
     source_field: Optional[str] = None
     try:
@@ -177,6 +182,7 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
         props = getattr(cfg, "properties", []) or []
         names = [getattr(p, "name", "") for p in props]
 
+        # likely content fields
         for cand in ["text", "content", "body", "chunk", "passage", "document", "value"]:
             if cand in names:
                 text_field = cand
@@ -190,6 +196,7 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
                     if text_field:
                         break
 
+        # likely source/url fields
         for cand in ["source", "url", "page", "path", "file", "document", "uri", "source_path"]:
             if cand in names:
                 source_field = cand
@@ -198,7 +205,6 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
         pass
 
     return (text_field or "text", source_field)
-
 
 # ============================ Retrieval (v4) ============================
 
@@ -215,6 +221,7 @@ def _best_extract_sentences(question: str, texts: List[str], max_pick: int = 6) 
         scored.append((base, len(s), s))
     scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
     picked = [s for sc, ln, s in scored if sc > 0] or [s for sc, ln, s in scored]
+    # clean + dedupe
     seen, out = set(), []
     for s in picked:
         ss = re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", s)).strip()
@@ -265,12 +272,17 @@ def _collect_from_objects(objs, text_field: str, source_field: Optional[str]) ->
 
 def _search_weaviate(client: Any, class_name: str, text_field: str, source_field: Optional[str],
                      embedder: SentenceTransformer, query: str, k: int) -> List[Dict[str,Any]]:
+    """
+    v4 flow: near-vector → hybrid → bm25
+    """
     want = max(k, 24)
     coll = client.collections.get(class_name)
 
+    # Prepare query vector
     qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32")
     qv_list = qv.tolist()
 
+    # 1) near-vector
     try:
         res = coll.query.near_vector(
             near_vector=qv_list,
@@ -283,6 +295,7 @@ def _search_weaviate(client: Any, class_name: str, text_field: str, source_field
     except Exception:
         pass
 
+    # 2) hybrid (vector + keyword)
     try:
         res = coll.query.hybrid(
             query=query,
@@ -297,6 +310,7 @@ def _search_weaviate(client: Any, class_name: str, text_field: str, source_field
     except Exception:
         pass
 
+    # 3) bm25 fallback
     try:
         res = coll.query.bm25(
             query=query,
@@ -318,13 +332,13 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
     prelim = [x for x in prelim if x.get("text")]
     if not prelim:
         return []
+    # simple diversity: cap near-duplicates
     uniq, seen = [], set()
     for c in prelim:
         key = re.sub(r"\W+", "", c["text"].lower())[:280]
         if key not in seen:
             seen.add(key); uniq.append(c)
     return _apply_reranker(query, uniq, k)
-
 
 # ============================ LLM Synthesis & Query Rewrite ============================
 
@@ -359,6 +373,7 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
         return None
 
 def _rewrite_query(orig_question: str) -> str:
+    """Use Claude to rewrite the query into a precise Forecast360/TS context; fallback to original."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key or not orig_question.strip():
         return orig_question
@@ -377,7 +392,6 @@ def _rewrite_query(orig_question: str) -> str:
     except Exception:
         return orig_question
 
-
 # ============================ Agent ============================
 
 class Forecast360Agent:
@@ -388,7 +402,10 @@ class Forecast360Agent:
             st.session_state["messages"] = []
 
     def _answer(self, user_q: str) -> str:
+        # 1) Query rewrite (domain-focused)
         q_precise = _rewrite_query(user_q)
+
+        # 2) Retrieve
         hits = retrieve(self.client, self.class_name, q_precise, TOP_K)
         if not hits:
             return ("We couldn’t find that detail in the Forecast360 knowledge base. "
@@ -396,10 +413,12 @@ class Forecast360Agent:
         texts = [h["text"] for h in hits]
         excerpts = _best_extract_sentences(q_precise, texts, max_pick=6) or texts[:6]
 
+        # 3) LLM Synthesis (strictly grounded)
         llm_ans = _anthropic_answer(q_precise, excerpts)
         if llm_ans:
             return llm_ans
 
+        # 4) Fallback extractive summary
         parts = ["Here’s what we can confirm from our knowledge base:"]
         parts += [f"- {ex}" for ex in excerpts]
         return "\n".join(parts)
@@ -415,56 +434,114 @@ class Forecast360Agent:
             return ("Sorry, something went wrong while processing your request. "
                     "Please try again in a moment.")
 
+# Connect to Weaviate
+if "f360_client" not in st.session_state:
+    with st.spinner("Connecting to the Forecast360 knowledge base…"):
+        try:
+            st.session_state["f360_client"] = _connect_weaviate()
+        except Exception as e:
+            st.error(f"⚠️ Weaviate configuration error: {e}")
+            st.stop()
 
-# ============================ Chat UI (updated) ============================
+agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
 
+# Initial assistant message (only once)
+if not st.session_state["messages"]:
+    st.session_state["messages"].append({
+        "role":"assistant",
+        "content":"Hello! I’m your Forecast360 AI Agent. How can I help today?"
+    })
+
+# Render chat history
+for m in st.session_state["messages"]:
+    avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
+    with st.chat_message(m["role"], avatar=avatar):
+        st.markdown(m["content"])
+
+# Process queued query (if any)
+if "pending_query" in st.session_state:
+    pq = st.session_state.pop("pending_query")
+    st.session_state["messages"].append({"role":"user","content":pq})
+    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
+        st.markdown(pq)
+    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        # keep UI unchanged; optionally rotate a richer loading phrase
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
+            reply = agent.respond(pq)
+        st.markdown(reply)
+    st.session_state["messages"].append({"role":"assistant","content":reply})
+    st.rerun()
+
+# Chat input
+user_q = st.chat_input("Ask me...", key="chat_box")
+if user_q:
+    st.session_state["messages"].append({"role":"user","content":user_q})
+    with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
+        st.markdown(user_q)
+    with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
+            reply = agent.respond(user_q)
+        st.markdown(reply)
+    st.session_state["messages"].append({"role":"assistant","content":reply})
+    st.rerun()
+
+
+    
+# ============================ Streamlit UI (same look & feel) ============================
 def run():
     st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
-
-    # Global styles (chat bubbles, sticky input, compact header)
+    
     st.markdown("""
     <style>
-      .f360-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
-      .f360-title { font-weight:600; font-size:1.15rem; }
-      .f360-subtle { color:#6b7280; font-size:0.85rem; }
-      .bubble { padding:12px 14px; border-radius:12px; margin:6px 0; }
-      .bubble.assistant { background:#f5f7fb; border:1px solid #e5e7eb; }
-      .bubble.user { background:#eefaf7; border:1px solid #d1fae5; }
-      .bubble pre, .bubble code { white-space:pre-wrap; word-break:break-word; }
-      .kb-bar { display:flex; align-items:center; gap:8px; margin:6px 0 12px 0; }
-      .kb-bar .caption { font-size:0.9rem; color:#6b7280; white-space:nowrap; }
-      .kb-refresh button { width:26px; height:26px; min-width:26px; min-height:26px; padding:0; border-radius:6px; }
-      .chip-row { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px 0; }
-      .chip { padding:6px 10px; border-radius:999px; border:1px solid #e5e7eb; background:#fff; font-size:0.85rem; cursor:pointer; }
-      .toolbar { display:flex; gap:8px; align-items:center; }
-      .toolbar .spacer { flex:1; }
-      .sticky-input { position:sticky; bottom:0; background:transparent; padding-top:4px; }
+    .stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
+    .stButton>button:hover { background-color: #007bff; color: white; }
+    .bottom-actions .stButton>button {
+        width: 42px; min-width: 42px; height: 42px; min-height: 42px;
+        padding: 0; border-radius: 12px; font-size: 18px;
+    }
+    .bottom-actions { margin-top: 6px; }
     </style>
     """, unsafe_allow_html=True)
-
+    
     # Header
     c1, c2 = st.columns([1, 8], vertical_alignment="center")
-    with c1:
-        st.image(ASSISTANT_ICON, width=64)
+    with c1: st.image(ASSISTANT_ICON, width=80)
     with c2:
-        st.markdown(
-            f"""<div class="f360-header">
-                   <div class="f360-title">Forecast360 AI Agent</div>
-                   <div class="spacer"></div>
-               </div>
-               <div class="f360-subtle">Created by iSoft · Time-Series Forecasting · Strict RAG</div>""",
-            unsafe_allow_html=True,
-        )
-
-    # Compact KB refresh row
+        st.markdown("### Forecast360 AI Agent")
+        st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
+    
+    # --- KB Refresh (Azure Blob -> Weaviate) ---
     with st.container():
-        st.markdown(
-            """<div class="kb-bar">
-                 <span class="caption">Knowledge Base: Weaviate ← Azure Blob</span>
-                 <span class="kb-refresh">""",
-            unsafe_allow_html=True,
-        )
-        if st.button("🔄", key="refresh_kb", help="Refresh KB from Azure Blob"):
+        st.markdown("""
+        <style>
+        .kb-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .kb-caption {
+            font-size: 0.9rem;
+            color: var(--text-color-secondary,#6b6f76);
+            white-space: nowrap;
+        }
+        .kb-refresh-btn button {
+            width: 26px; height: 26px;
+            min-width: 26px; min-height: 26px;
+            padding: 0; border-radius: 6px;
+            font-size: 14px; line-height: 1;
+        }
+        </style>
+        <div class="kb-row">
+          <span class="kb-caption">
+            Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
+          </span>
+          <span class="kb-refresh-btn">""", unsafe_allow_html=True)
+    
+        # The button itself
+        if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
             with st.spinner("Refreshing knowledge base…"):
                 try:
                     stats = sync_from_azure(
@@ -477,105 +554,19 @@ def run():
                         max_docs=None,
                     )
                     st.success(
-                        f"Done. Files: {stats['processed_files']} | Chunks: {stats['inserted_chunks']} | "
-                        f"Cleared: {stats['cleared_sources']} | Skipped: {stats['skipped_files']}"
+                        f"Done. Files: {stats['processed_files']} | "
+                        f"Chunks: {stats['inserted_chunks']} | "
+                        f"Cleared: {stats['cleared_sources']} | "
+                        f"Skipped: {stats['skipped_files']}"
                         + (f" | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
                     )
                     st.toast("Knowledge base refreshed.")
                 except Exception as e:
                     st.error(f"KB refresh failed: {e}")
+    
+        # close the flex container
         st.markdown("</span></div>", unsafe_allow_html=True)
-
-    # Connect to Weaviate
-    if "f360_client" not in st.session_state:
-        with st.spinner("Connecting to the Forecast360 knowledge base…"):
-            try:
-                st.session_state["f360_client"] = _connect_weaviate()
-            except Exception as e:
-                st.error(f"⚠️ Weaviate configuration error: {e}")
-                st.stop()
-    agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
-
-    # Toolbar (copy last / clear chat)
-    with st.container():
-        t1, t2, t3 = st.columns([6, 2, 2])
-        with t1:
-            st.caption("Chat with the Forecast360 knowledge base.")
-        with t2:
-            if st.button("📋 Copy last", help="Copy last assistant reply"):
-                last = next((m for m in reversed(st.session_state.get("messages", [])) if m["role"]=="assistant"), None)
-                if last:
-                    st.code(last["content"])
-                else:
-                    st.info("No assistant message yet.")
-        with t3:
-            if st.button("🗑️ Clear", help="Clear conversation history"):
-                st.session_state["messages"] = []
-                st.rerun()
-
-    # Initial assistant message
-    if not st.session_state["messages"]:
-        st.session_state["messages"].append({
-            "role":"assistant",
-            "content":"Hello! I’m your Forecast360 AI Agent. Ask me anything about models, pipelines, dashboards, accuracy metrics, or Azure integrations."
-        })
-
-    # Quick suggestion chips (non-intrusive)
-    st.markdown('<div class="chip-row">', unsafe_allow_html=True)
-    col_chips = st.columns(4)
-    chips = [
-        "What models does Forecast360 support?",
-        "How do I retrain a model and compare metrics?",
-        "Explain MAPE vs RMSE in Forecast360.",
-        "How to connect Azure Blob as a source?",
-    ]
-    for i, chip in enumerate(chips):
-        with col_chips[i]:
-            if st.button(chip, key=f"chip_{i}", help="Insert example question"):
-                st.session_state["pending_query"] = chip
-                st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Render chat history with bubble styling
-    for m in st.session_state["messages"]:
-        avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
-        with st.chat_message(m["role"], avatar=avatar):
-            # bubble classes map to role
-            css_class = "assistant" if m["role"]=="assistant" else "user"
-            st.markdown(f'<div class="bubble {css_class}">{m["content"]}</div>', unsafe_allow_html=True)
-
-    # Process queued query (chip click path)
-    if "pending_query" in st.session_state:
-        pq = st.session_state.pop("pending_query")
-        st.session_state["messages"].append({"role":"user","content":pq})
-        with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
-            st.markdown(f'<div class="bubble user">{pq}</div>', unsafe_allow_html=True)
-        with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-            loading_msg = random.choice(PROMPTS["loading"])
-            with st.spinner(loading_msg):
-                reply = agent.respond(pq)
-            st.markdown(f'<div class="bubble assistant">{reply}</div>', unsafe_allow_html=True)
-        st.session_state["messages"].append({"role":"assistant","content":reply})
-        st.rerun()
-
-    # Sticky chat input
-    with st.container():
-        st.markdown('<div class="sticky-input">', unsafe_allow_html=True)
-        user_q = st.chat_input("Ask about Forecast360 models, pipelines, metrics, Azure connectors…", key="chat_box")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if user_q:
-        st.session_state["messages"].append({"role":"user","content":user_q})
-        with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
-            st.markdown(f'<div class="bubble user">{user_q}</div>', unsafe_allow_html=True)
-        with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-            loading_msg = random.choice(PROMPTS["loading"])
-            with st.spinner(loading_msg):
-                reply = agent.respond(user_q)
-            st.markdown(f'<div class="bubble assistant">{reply}</div>', unsafe_allow_html=True)
-        st.session_state["messages"].append({"role":"assistant","content":reply})
-        st.rerun()
-
+#-------------------------------------------------------------------
 
 # allow “from forecast360_chat import run” in a parent app
 if __name__ == "__main__":
