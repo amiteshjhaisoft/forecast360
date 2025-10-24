@@ -2758,99 +2758,41 @@ def page_getting_started():
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
      
 #     # render_chat_popover()
-# # --- app render ---
-# if st.session_state.get("show_sidebar"):
-#     # Sidebar
-#     try:
-#         sidebar_getting_started()
-#     except Exception as e:
-#         st.sidebar.error(f"Sidebar failed: {e}")
+# --- app render ---
+if st.session_state.get("show_sidebar"):
+    # Sidebar
+    try:
+        sidebar_getting_started()
+    except Exception as e:
+        st.sidebar.error(f"Sidebar failed: {e}")
 
-#     # Main page
-#     try:
-#         page_getting_started()
-#     except Exception as e:
-#         st.error(f"Error rendering Getting Started: {e}")
+    # Main page
+    try:
+        page_getting_started()
+    except Exception as e:
+        st.error(f"Error rendering Getting Started: {e}")
 
 
-# # --- app render with BUTTONS ---
-# if "view" not in st.session_state:
-#     st.session_state["view"] = "Home"  # default landing on first load
-
-# if st.session_state.get("show_sidebar", True):
-#     try:
-#         sidebar_getting_started()
-#     except Exception as e:
-#         st.sidebar.error(f"Sidebar failed: {e}")
-
-# # Top nav buttons
-# col1, col2 = st.columns([1, 1])
-# with col1:
-#     if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
-#         st.session_state["view"] = "Home"
-# with col2:
-#     if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
-#         st.session_state["view"] = "AI Agent"
-
-# st.divider()
-
-# # Main view
-# try:
-#     if st.session_state["view"] == "Home":
-#         page_getting_started()
-#     else:
-#         # from forecast360_chat import run as run_ai_agent
-#         run_ai_agent()
-# except Exception as e:
-#     st.error(f"Error rendering {st.session_state['view']}: {e}")
-
-# --- app render with BUTTONS + start hidden sidebar ---
-import streamlit as st
-
-# default view and sidebar visibility
+# --- app render with BUTTONS ---
 if "view" not in st.session_state:
-    st.session_state["view"] = "Home"            # default landing
-if "sidebar_visible" not in st.session_state:
-    st.session_state["sidebar_visible"] = False  # START HIDDEN
+    st.session_state["view"] = "Home"  # default landing on first load
+
+if st.session_state.get("show_sidebar", True):
+    try:
+        sidebar_getting_started()
+    except Exception as e:
+        st.sidebar.error(f"Sidebar failed: {e}")
 
 # Top nav buttons
-col1, col2, col3 = st.columns([1, 1, 0.15])  # col3 holds the sidebar toggle on Home
+col1, col2 = st.columns([1, 1])
 with col1:
     if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
         st.session_state["view"] = "Home"
 with col2:
     if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
         st.session_state["view"] = "AI Agent"
-with col3:
-    # Show a tiny hamburger toggle only on Home
-    if st.session_state["view"] == "Home":
-        if st.button("☰", help="Show/Hide Sidebar"):
-            st.session_state["sidebar_visible"] = not st.session_state["sidebar_visible"]
 
 st.divider()
-
-# Decide sidebar visibility:
-# - Always hidden on AI Agent
-# - On Home, controlled by the toggle (defaults to hidden at start)
-sidebar_should_show = (st.session_state["view"] == "Home") and st.session_state["sidebar_visible"]
-
-# Collapse/restore sidebar via CSS + conditional rendering
-if not sidebar_should_show:
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebar"] { display: none !important; }
-        div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-else:
-    # Render your sidebar only when visible
-    try:
-        sidebar_getting_started()
-    except Exception as e:
-        st.sidebar.error(f"Sidebar failed: {e}")
 
 # Main view
 try:
@@ -2861,5 +2803,9 @@ try:
         run_ai_agent()
 except Exception as e:
     st.error(f"Error rendering {st.session_state['view']}: {e}")
+
+
+
+
 
 
