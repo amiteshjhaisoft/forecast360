@@ -2756,78 +2756,52 @@ def page_getting_started():
     local_time = datetime.now(tz)
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
-     
-import streamlit as st
-
-# ---------- App state ----------
+#---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --- app render with BUTTONS (hide sidebar on AI Agent) ---
 if "view" not in st.session_state:
-    st.session_state["view"] = "Home"            # "Home" first
-if "sidebar_visible" not in st.session_state:
-    st.session_state["sidebar_visible"] = True   # Sidebar shown on Home
+    st.session_state["view"] = "Home"  # default landing on first load
 
-# ---------- Sidebar: only render when visible ----------
-def render_sidebar():
-    st.sidebar.markdown("### Navigation")
-    col_h, col_a = st.sidebar.columns(2)
-    with col_h:
-        if st.button("🏠 Home", key="sb_home_btn", use_container_width=True):
-            st.session_state["view"] = "Home"
-            st.session_state["sidebar_visible"] = True
-            st.rerun()
-    with col_a:
-        if st.button("🤖 AI Agent", key="sb_agent_btn", use_container_width=True):
-            st.session_state["view"] = "AI Agent"
-            st.session_state["sidebar_visible"] = False
-            st.rerun()
+# Top nav buttons
+col1, col2 = st.columns([1, 1])
+with col1:
+    if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
+        st.session_state["view"] = "Home"
+with col2:
+    if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
+        st.session_state["view"] = "AI Agent"
 
-# Hide or show the sidebar via CSS
-def apply_sidebar_visibility():
-    if not st.session_state["sidebar_visible"]:
-        st.markdown(
-            """
-            <style>
-              [data-testid="stSidebar"] { display: none !important; }
-              div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+st.divider()
 
-# ---------- Main content renderers (your functions) ----------
-def page_getting_started():
-    st.subheader("Home")
-    st.write("Your Home page content goes here...")
+# Sidebar slot so we can conditionally render it
+sidebar_slot = st.sidebar.empty()
 
-def run_ai_agent():
-    st.subheader("AI Agent")
-    st.write("Your Forecast360 AI Agent UI goes here...")
-
-# ---------- Apply sidebar visibility & render it if needed ----------
-apply_sidebar_visibility()
-if st.session_state["sidebar_visible"]:
+# Hide/Show sidebar based on view
+if st.session_state["view"] == "AI Agent":
+    # Do NOT render sidebar contents and collapse the sidebar visually
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    # Render sidebar normally on Home
     try:
-        render_sidebar()
+        with sidebar_slot:
+            sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-# When the sidebar is hidden (AI Agent view), show a small Home button on top bar
-if not st.session_state["sidebar_visible"]:
-    top_c1, top_c2 = st.columns([0.18, 0.82])
-    with top_c1:
-        if st.button("🏠 Home", type="primary", key="top_home_btn"):
-            st.session_state["view"] = "Home"
-            st.session_state["sidebar_visible"] = True
-            st.rerun()
-    with top_c2:
-        st.write("")  # spacer
-
-
-
-# ---------- Main view ----------
+# Main view
 try:
     if st.session_state["view"] == "Home":
         page_getting_started()
     else:
+        # from forecast360_chat import run as run_ai_agent
         run_ai_agent()
 except Exception as e:
     st.error(f"Error rendering {st.session_state['view']}: {e}")
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------
