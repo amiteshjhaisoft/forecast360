@@ -61,6 +61,6 @@ weaviate-agents>=0.0.8
 # anthropic>=0.34
 
 
-SentenceTransformer
+# SentenceTransformer
 
 # MetadataQuery
