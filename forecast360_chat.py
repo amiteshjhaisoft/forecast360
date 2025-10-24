@@ -18,9 +18,11 @@ try:
 except Exception:
     CrossEncoder = None
 
+
 # --- Weaviate v4 client (Collections API) ---
 import weaviate
-import weaviate.classes as wvc  # <- v4 enums/helpers (query.MetadataQuery, init.Auth, etc.)
+import weaviate.classes as wvc
+from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
 # ============================ Configuration ============================
 
@@ -53,18 +55,28 @@ PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
 def _connect_weaviate():
     if not WEAVIATE_URL:
         raise RuntimeError("Set [weaviate].url in secrets.")
-    auth = wvc.init.Auth.api_key(WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+
+    auth = Auth.api_key(WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=WEAVIATE_URL,
         auth_credentials=auth,
-        timeout=(15, 120),
+        # use AdditionalConfig to set timeouts (seconds)
+        additional_config=AdditionalConfig(
+            timeout=Timeout(init=30, query=60, insert=120)
+        ),
+        # you can also pass headers here if needed, e.g. OpenAI keys:
+        # headers={"X-OpenAI-Api-Key": os.getenv("OPENAI_APIKEY")}
     )
-    # quick check: collection must exist
+
+    # quick check: collection must exist (use() is the idiomatic v4 call)
     try:
-        _ = client.collections.get(COLLECTION_NAME)
+        _ = client.collections.use(COLLECTION_NAME)
     except Exception as e:
         raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or client unreachable: {e}")
+
     return client
+
 
 @st.cache_resource(show_spinner=False)
 def _load_embed_model(name: str) -> SentenceTransformer:
