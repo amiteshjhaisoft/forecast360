@@ -2759,7 +2759,24 @@ def page_getting_started():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
      
-    # render_chat_popover()
+#     # render_chat_popover()
+# # --- app render ---
+# if st.session_state.get("show_sidebar"):
+#     # Sidebar
+#     try:
+#         sidebar_getting_started()
+#     except Exception as e:
+#         st.sidebar.error(f"Sidebar failed: {e}")
+
+#     # Main page
+#     try:
+#         page_getting_started()
+#     except Exception as e:
+#         st.error(f"Error rendering Getting Started: {e}")
+
+# at top of file
+from forecast360_chat import run as run_ai_agent
+
 # --- app render ---
 if st.session_state.get("show_sidebar"):
     # Sidebar
@@ -2768,11 +2785,20 @@ if st.session_state.get("show_sidebar"):
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-    # Main page
-    try:
-        page_getting_started()
-    except Exception as e:
-        st.error(f"Error rendering Getting Started: {e}")
+    # Main page with two tabs
+    tab_home, tab_agent = st.tabs(["Home", "AI Agent"])
+
+    with tab_home:
+        try:
+            page_getting_started()  # your existing Home page
+        except Exception as e:
+            st.error(f"Error rendering Getting Started: {e}")
+
+    with tab_agent:
+        try:
+            run_ai_agent()  # renders the chat app
+        except Exception as e:
+            st.error(f"Error rendering AI Agent: {e}")
 
 
 
