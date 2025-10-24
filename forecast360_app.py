@@ -154,10 +154,8 @@ from PIL import Image
 from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
 
-# DI chat popover
-# from deci_int import render_chat_popover
-
-
+# AI Agent
+from forecast360_chat import run as run_ai_agent
 
 # Patch once so ALL renders/uploads are captured
 if "kb" not in st.session_state:
@@ -2774,31 +2772,34 @@ def page_getting_started():
 #     except Exception as e:
 #         st.error(f"Error rendering Getting Started: {e}")
 
-# at top of file
-from forecast360_chat import run as run_ai_agent
 
-# at top
-from forecast360_chat import run as run_ai_agent
+# --- app render with BUTTONS ---
+if "view" not in st.session_state:
+    st.session_state["view"] = "Home"  # default landing on first load
 
-# --- app render with TABS ---
 if st.session_state.get("show_sidebar", True):
     try:
         sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-# Tabs always default to the first one ("Home")
-tab_home, tab_agent = st.tabs(["Home", "AI Agent"])
+# Top nav buttons
+col1, col2 = st.columns([1, 1])
+with col1:
+    if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
+        st.session_state["view"] = "Home"
+with col2:
+    if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
+        st.session_state["view"] = "AI Agent"
 
-with tab_home:
-    try:
+st.divider()
+
+# Main view
+try:
+    if st.session_state["view"] == "Home":
         page_getting_started()
-    except Exception as e:
-        st.error(f"Error rendering Home: {e}")
-
-with tab_agent:
-    try:
-        # from forecast360_chat import run as run_ai_agent  # if needed
+    else:
+        # from forecast360_chat import run as run_ai_agent
         run_ai_agent()
-    except Exception as e:
-        st.error(f"Error rendering AI Agent: {e}")
+except Exception as e:
+    st.error(f"Error rendering {st.session_state['view']}: {e}")
