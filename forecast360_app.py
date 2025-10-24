@@ -2770,7 +2770,7 @@ with col2:
     if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
         st.session_state["view"] = "AI Agent"
 
-st.divider()
+# st.divider()
 
 # Sidebar slot so we can conditionally render it
 sidebar_slot = st.sidebar.empty()
