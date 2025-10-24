@@ -23,6 +23,7 @@ except Exception:
 import weaviate
 import weaviate.classes as wvc
 from weaviate.classes.init import Auth, AdditionalConfig, Timeout
+from kb_sync_azure import sync_from_azure
 
 # ============================ Configuration ============================
 
@@ -421,3 +422,34 @@ if user_q:
     st.rerun()
 
 # Bottom-right compact actions removed (no crawler/cache to refresh/clear)
+
+# --- KB Refresh (Azure Blob -> Weaviate) ---
+with st.container():
+    col_a, col_b = st.columns([5, 2])
+    with col_a:
+        st.caption("Knowledge Base: Weaviate ← Azure Blob folder (refresh to re-sync latest files).")
+    with col_b:
+        if st.button("🔄 Refresh KB", use_container_width=True):
+            with st.spinner("Refreshing knowledge base from Azure Blob…"):
+                try:
+                    stats = sync_from_azure(
+                        st_secrets=st.secrets,
+                        collection_name=COLLECTION_NAME,
+                        # optional: override keys if your secrets use different names
+                        container_key="container",
+                        prefix_key="prefix",  # subfolder inside the container to crawl
+                        embed_model_key=("rag", "embed_model"),  # used only if vectorizer='none'
+                        delete_before_upsert=True,
+                        max_docs=None,  # or set a small number during testing
+                    )
+                    st.success(
+                        f"Done. Files: {stats['processed_files']}  | "
+                        f"Chunks inserted: {stats['inserted_chunks']}  | "
+                        f"Cleared sources: {stats['cleared_sources']}  | "
+                        f"Skipped files: {stats['skipped_files']}"
+                        + (f"  | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
+                    )
+                    st.toast("Knowledge base refreshed.")
+                except Exception as e:
+                    st.error(f"KB refresh failed: {e}")
+
