@@ -33,6 +33,10 @@ def _sget(section: str, key: str, default: Any = None) -> Any:
     except Exception:
         return default
 
+# from rag_helpers import retrieve as f360_retrieve
+# from rag_helpers import best_extract_sentences as f360_best_extract
+# from rag_helpers import load_reranker as f360_load_reranker
+
 WEAVIATE_URL     = _sget("weaviate", "url", "")
 WEAVIATE_API_KEY = _sget("weaviate", "api_key", "")
 COLLECTION_NAME  = _sget("weaviate", "collection", "Forecast360").strip()  # REQUIRED
@@ -108,7 +112,6 @@ PROMPTS = {
 
 # Backward-compatible minimal prompts (kept for fallback)
 COMPANY_RULES = PROMPTS["system"]
-
 SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
 
 # ============================ Helpers ============================
@@ -155,35 +158,52 @@ RERANKER = _load_reranker()
 
 def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
     """
-    Infer the main text field and an optional source/url-like field using v4 collection config.
-    Prefers names: text/content/body/chunk/passsage/document/value for text;
-    url/source/page/path/file/document/uri for source.
+    Pick the main text field and an optional source/url-like field.
+
+    • You can force the property names via Streamlit secrets:
+        [weaviate]
+        text_property   = "content"        # REQUIRED if your schema doesn't use 'text'
+        source_property = "source_path"    # OPTIONAL
+
+    • If not forced, we fall back to schema introspection + heuristics.
     """
-    text_field = None
-    source_field = None
+    # --- secrets-based override (preferred if set) ---
+    forced_text = _sget("weaviate", "text_property", None)
+    forced_src  = _sget("weaviate", "source_property", None)
+    if forced_text:
+        return forced_text, forced_src
+
+    # --- heuristic fallback via schema inspection ---
+    text_field: Optional[str] = None
+    source_field: Optional[str] = None
     try:
         coll = client.collections.get(class_name)
         cfg = coll.config.get()
         props = getattr(cfg, "properties", []) or []
         names = [getattr(p, "name", "") for p in props]
 
-        for cand in ["text","content","body","chunk","passage","document","value"]:
+        # likely content fields
+        for cand in ["text", "content", "body", "chunk", "passage", "document", "value"]:
             if cand in names:
                 text_field = cand
                 break
+
         if not text_field:
             for p in props:
                 dts = [str(dt).lower() for dt in (getattr(p, "data_type", []) or [])]
                 if any("text" in dt for dt in dts):
                     text_field = getattr(p, "name", None)
-                    if text_field: break
+                    if text_field:
+                        break
 
-        for cand in ["url","source","page","path","file","document","uri"]:
+        # likely source/url fields
+        for cand in ["source", "url", "page", "path", "file", "document", "uri", "source_path"]:
             if cand in names:
                 source_field = cand
                 break
     except Exception:
         pass
+
     return (text_field or "text", source_field)
 
 # ============================ Retrieval (v4) ============================
@@ -492,7 +512,6 @@ with st.container():
     # close the flex container
     st.markdown("</span></div>", unsafe_allow_html=True)
 #-------------------------------------------------------------------
-    
 
 # Connect to Weaviate
 if "f360_client" not in st.session_state:
@@ -546,7 +565,3 @@ if user_q:
         st.markdown(reply)
     st.session_state["messages"].append({"role":"assistant","content":reply})
     st.rerun()
-
-
-
-
