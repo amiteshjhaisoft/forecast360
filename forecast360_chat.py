@@ -505,10 +505,10 @@ with st.container():
     <div id="kb-refresh"></div>
     """, unsafe_allow_html=True)
 
-    # col_a, col_b = st.columns([1, 0.12])
-    # with col_a:
+    col_a, col_b = st.columns([0.2, 0.8)
+    with col_a:
         st.caption("Knowledge Base: Weaviate ← Azure Blob folder (refresh to re-sync latest files).")
-    # with col_b:
+    with col_b:
         # icon-only, smallest possible; tooltip via help
         if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
             with st.spinner("Refreshing…"):
