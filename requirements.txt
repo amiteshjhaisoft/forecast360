@@ -60,5 +60,5 @@ weaviate-agents>=0.0.8
 
 anthropic>=0.34
 
-weaviate-client>=3.25,<4 
+
 sentence-transformers
