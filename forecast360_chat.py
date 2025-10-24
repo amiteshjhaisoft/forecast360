@@ -432,7 +432,7 @@ class Forecast360Agent:
 
 # ============================ Streamlit UI (same look & feel) ============================
 def run():
-    st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
+    st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
     
     st.markdown("""
     <style>
