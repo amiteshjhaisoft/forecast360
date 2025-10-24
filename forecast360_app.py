@@ -2775,8 +2775,4 @@ if st.session_state.get("show_sidebar"):
         st.error(f"Error rendering Getting Started: {e}")
 
 
-import forecast360_chat  # same folder import
 
-st.title("Forecast360 AI Agent")
-if st.button("Forecast360 AI Agent"):
-    forecast360_chat.run()   # call the chat UI
