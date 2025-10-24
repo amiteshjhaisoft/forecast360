@@ -3,7 +3,7 @@
 # Weaviate v4 client compatible
 
 from __future__ import annotations
-import os, re, json, itertools
+import os, re, json, itertools, random
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -17,7 +17,6 @@ try:
     from sentence_transformers import CrossEncoder
 except Exception:
     CrossEncoder = None
-
 
 # --- Weaviate v4 client (Collections API) ---
 import weaviate
@@ -52,6 +51,66 @@ USER_ICON      = _sget("ui", "user_icon", "assets/avatar.png")
 PAGE_ICON      = _sget("ui", "page_icon", "assets/forecast360.png")
 PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
 
+# ============================ Prompts (Domain-Focused) ============================
+
+PROMPTS = {
+    "system": (
+        "You are the Forecast360 AI Agent — a professional Decision-Intelligence and Time-Series Forecasting "
+        "assistant developed by iSoft ANZ Pvt Ltd.\n\n"
+        "Purpose:\n"
+        "You help users understand, operate, and optimize Forecast360 — a platform for data ingestion, feature "
+        "engineering, model training, validation, forecasting, and visualization of time-series data.\n\n"
+        "Persona:\n"
+        "- You speak as “We” or “Our team”.\n"
+        "- You are analytical, precise, and supportive.\n"
+        "- You explain concepts clearly — technical but approachable.\n"
+        "- You never guess; if information is not found in context, say “Insufficient Context.”\n"
+        "- Avoid URLs or speculative statements.\n"
+        "- Maintain a professional, solution-oriented tone.\n\n"
+        "Knowledge Scope:\n"
+        "- Forecast360’s modules, architecture, connectors, pipelines, and dashboards.\n"
+        "- Time-series forecasting algorithms (ARIMA, SARIMA, Prophet, TBATS, XGBoost, LightGBM, TFT, etc.).\n"
+        "- Forecast accuracy metrics (RMSE, MAE, MAPE, R², etc.).\n"
+        "- Data preparation, chunking, and embedding techniques.\n"
+        "- Forecast360’s integration with Azure services (Blob, Databricks, Synapse, ADF).\n"
+        "- Model versioning, retraining, and leaderboard evaluation.\n"
+        "- Visualization and decision intelligence workflows.\n\n"
+        "Tone:\n"
+        "- Friendly yet authoritative.\n"
+        "- Use bullet points and concise explanations for technical topics."
+    ),
+    "retrieval_template": (
+        "Answer the question strictly using Forecast360’s verified knowledge base context.\n\n"
+        "Question:\n{question}\n\n"
+        "Context:\n{ctx}\n\n"
+        "Rules:\n"
+        "- Use the Forecast360 domain vocabulary (models, pipelines, dashboards, metrics, integrations).\n"
+        "- Be concise, factual, and professional.\n"
+        "- Use structured lists or short paragraphs for clarity.\n"
+        "- If information is missing, respond only: “Insufficient Context.”"
+    ),
+    "query_rewrite": (
+        "Reinterpret the user’s question in terms of Forecast360’s time-series forecasting context.\n\n"
+        "Examples:\n"
+        "- 'How does it work?' → 'How does Forecast360 perform time-series forecasting end-to-end?'\n"
+        "- 'Which models do you use?' → 'Which forecasting algorithms are implemented in Forecast360?'\n"
+        "- 'How accurate are forecasts?' → 'How does Forecast360 measure and display forecast accuracy?'\n\n"
+        "Return only the rewritten, precise query."
+    ),
+    "loading": [
+        "Analyzing your forecasting query…",
+        "Retrieving the most relevant Forecast360 insights…",
+        "Evaluating models and metrics from the knowledge base…",
+        "Synthesizing a data-driven answer from Forecast360 context…",
+        "Connecting to Forecast360’s model intelligence engine…",
+    ],
+}
+
+# Backward-compatible minimal prompts (kept for fallback)
+COMPANY_RULES = PROMPTS["system"]
+
+SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
+
 # ============================ Helpers ============================
 
 def _connect_weaviate():
@@ -63,12 +122,9 @@ def _connect_weaviate():
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=WEAVIATE_URL,
         auth_credentials=auth,
-        # use AdditionalConfig to set timeouts (seconds)
         additional_config=AdditionalConfig(
             timeout=Timeout(init=30, query=60, insert=120)
         ),
-        # you can also pass headers here if needed, e.g. OpenAI keys:
-        # headers={"X-OpenAI-Api-Key": os.getenv("OPENAI_APIKEY")}
     )
 
     # quick check: collection must exist (use() is the idiomatic v4 call)
@@ -185,10 +241,9 @@ def _collect_from_objects(objs, text_field: str, source_field: Optional[str]) ->
         md = getattr(o, "metadata", None)
         score_val = 0.0
         if md is not None:
-            # near_vector returns distance; hybrid/bm25 return score
             dist = getattr(md, "distance", None)
             if isinstance(dist, (int, float)):
-                score_val = 1.0 - float(dist)  # crude cosine-sim mapping
+                score_val = 1.0 - float(dist)
             sc = getattr(md, "score", None)
             if isinstance(sc, (int, float)) and sc > score_val:
                 score_val = float(sc)
@@ -263,29 +318,9 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
         key = re.sub(r"\W+", "", c["text"].lower())[:280]
         if key not in seen:
             seen.add(key); uniq.append(c)
-    # rerank (optional)
     return _apply_reranker(query, uniq, k)
 
-# ============================ LLM Synthesis (optional) ============================
-
-COMPANY_RULES = """
-- Persona: You are the Forecast360 AI Agent, a courteous, precise representative speaking as “We”.
-- Grounding: Use ONLY the provided context. If a fact is not present, say “Insufficient Context.”
-- No speculation or extrapolation. No generic promises.
-- Tone: Polite, concise, professional. No URLs in the answer.
-"""
-
-SYNTHESIS_PROMPT_TEMPLATE = """
-Answer the user’s question STRICTLY from the context below.
-If the context does not explicitly contain the answer, reply only with: “Insufficient Context.”
-
-Question: {question}
-
-Context:
----
-{ctx}
----
-"""
+# ============================ LLM Synthesis & Query Rewrite ============================
 
 def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]:
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
@@ -295,15 +330,18 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
         import anthropic as _anthropic
     except Exception:
         return None
-    prompt = SYNTHESIS_PROMPT_TEMPLATE.format(question=question, ctx="\n".join(f"- {c}" for c in context_blocks))
+    prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
+        question=question,
+        ctx="\n".join(f"- {c}" for c in context_blocks)
+    )
     try:
         client = _anthropic.Anthropic(api_key=key)
         msg = client.messages.create(
             model=os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
-            system=COMPANY_RULES,
+            system=PROMPTS["system"],
             max_tokens=500,
             temperature=0.0,
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
         )
         text = "".join([b.text for b in msg.content if getattr(b, "type", "") == "text"]).strip()
         if not text:
@@ -314,26 +352,53 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
     except Exception:
         return None
 
+def _rewrite_query(orig_question: str) -> str:
+    """Use Claude to rewrite the query into a precise Forecast360/TS context; fallback to original."""
+    key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
+    if not key or not orig_question.strip():
+        return orig_question
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=key)
+        msg = client.messages.create(
+            model=os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
+            system=PROMPTS["system"],
+            max_tokens=120,
+            temperature=0.0,
+            messages=[{"role": "user", "content": PROMPTS["query_rewrite"] + "\n\nUser question:\n" + orig_question}],
+        )
+        text = "".join([b.text for b in msg.content if getattr(b, "type", "") == "text"]).strip()
+        return text or orig_question
+    except Exception:
+        return orig_question
+
 # ============================ Agent ============================
 
 class Forecast360Agent:
     def __init__(self, client: Any, class_name: str):
         self.client = client
         self.class_name = class_name
-        if "messages" not in st.session_state: st.session_state["messages"] = []
+        if "messages" not in st.session_state:
+            st.session_state["messages"] = []
 
     def _answer(self, user_q: str) -> str:
-        hits = retrieve(self.client, self.class_name, user_q, TOP_K)
+        # 1) Query rewrite (domain-focused)
+        q_precise = _rewrite_query(user_q)
+
+        # 2) Retrieve
+        hits = retrieve(self.client, self.class_name, q_precise, TOP_K)
         if not hits:
             return ("We couldn’t find that detail in the Forecast360 knowledge base. "
                     "Please rephrase or ask about a different topic.")
         texts = [h["text"] for h in hits]
-        excerpts = _best_extract_sentences(user_q, texts, max_pick=6) or texts[:6]
+        excerpts = _best_extract_sentences(q_precise, texts, max_pick=6) or texts[:6]
 
-        llm_ans = _anthropic_answer(user_q, excerpts)
+        # 3) LLM Synthesis (strictly grounded)
+        llm_ans = _anthropic_answer(q_precise, excerpts)
         if llm_ans:
             return llm_ans
 
+        # 4) Fallback extractive summary
         parts = ["Here’s what we can confirm from our knowledge base:"]
         parts += [f"- {ex}" for ex in excerpts]
         return "\n".join(parts)
@@ -341,8 +406,8 @@ class Forecast360Agent:
     def respond(self, user_q: str) -> str:
         ql = user_q.strip().lower()
         if re.fullmatch(r"(hi|hello|hey|greetings|good (morning|afternoon|evening))[\W_]*", ql or ""):
-            return ("Hello! I’m the Forecast360 AI Agent. Ask me anything about Forecast360—"
-                    "features, setup, data flows, dashboards, or architecture—and I’ll answer using our knowledge base.")
+            return ("Hello! We’re the Forecast360 AI Agent. Ask us about forecasting models, pipelines, dashboards, "
+                    "accuracy metrics, or Azure integrations — we’ll answer using our knowledge base.")
         try:
             return self._answer(user_q)
         except Exception:
@@ -403,7 +468,9 @@ if "pending_query" in st.session_state:
     with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
         st.markdown(pq)
     with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-        with st.spinner("Analyzing your query…"):
+        # keep UI unchanged; optionally rotate a richer loading phrase
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
             reply = agent.respond(pq)
         st.markdown(reply)
     st.session_state["messages"].append({"role":"assistant","content":reply})
@@ -416,13 +483,12 @@ if user_q:
     with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
         st.markdown(user_q)
     with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-        with st.spinner("Analyzing your query…"):
+        loading_msg = random.choice(PROMPTS["loading"])
+        with st.spinner(loading_msg):
             reply = agent.respond(user_q)
         st.markdown(reply)
     st.session_state["messages"].append({"role":"assistant","content":reply})
     st.rerun()
-
-# Bottom-right compact actions removed (no crawler/cache to refresh/clear)
 
 # --- KB Refresh (Azure Blob -> Weaviate) ---
 with st.container():
@@ -436,12 +502,11 @@ with st.container():
                     stats = sync_from_azure(
                         st_secrets=st.secrets,
                         collection_name=COLLECTION_NAME,
-                        # optional: override keys if your secrets use different names
                         container_key="container",
-                        prefix_key="prefix",  # subfolder inside the container to crawl
-                        embed_model_key=("rag", "embed_model"),  # used only if vectorizer='none'
+                        prefix_key="prefix",
+                        embed_model_key=("rag", "embed_model"),
                         delete_before_upsert=True,
-                        max_docs=None,  # or set a small number during testing
+                        max_docs=None,
                     )
                     st.success(
                         f"Done. Files: {stats['processed_files']}  | "
@@ -453,4 +518,3 @@ with st.container():
                     st.toast("Knowledge base refreshed.")
                 except Exception as e:
                     st.error(f"KB refresh failed: {e}")
-
