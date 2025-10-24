@@ -2757,55 +2757,77 @@ def page_getting_started():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
      
-#     # render_chat_popover()
-# --- app render ---
-if st.session_state.get("show_sidebar"):
-    # Sidebar
-    try:
-        sidebar_getting_started()
-    except Exception as e:
-        st.sidebar.error(f"Sidebar failed: {e}")
+import streamlit as st
 
-    # Main page
-    try:
-        page_getting_started()
-    except Exception as e:
-        st.error(f"Error rendering Getting Started: {e}")
-
-
-# --- app render with BUTTONS ---
+# ---------- App state ----------
 if "view" not in st.session_state:
-    st.session_state["view"] = "Home"  # default landing on first load
+    st.session_state["view"] = "Home"            # "Home" first
+if "sidebar_visible" not in st.session_state:
+    st.session_state["sidebar_visible"] = True   # Sidebar shown on Home
 
-if st.session_state.get("show_sidebar", True):
+# ---------- Sidebar: only render when visible ----------
+def render_sidebar():
+    st.sidebar.markdown("### Navigation")
+    col_h, col_a = st.sidebar.columns(2)
+    with col_h:
+        if st.button("🏠 Home", key="sb_home_btn", use_container_width=True):
+            st.session_state["view"] = "Home"
+            st.session_state["sidebar_visible"] = True
+            st.rerun()
+    with col_a:
+        if st.button("🤖 AI Agent", key="sb_agent_btn", use_container_width=True):
+            st.session_state["view"] = "AI Agent"
+            st.session_state["sidebar_visible"] = False
+            st.rerun()
+
+# Hide or show the sidebar via CSS
+def apply_sidebar_visibility():
+    if not st.session_state["sidebar_visible"]:
+        st.markdown(
+            """
+            <style>
+              [data-testid="stSidebar"] { display: none !important; }
+              div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+# ---------- Main content renderers (your functions) ----------
+def page_getting_started():
+    st.subheader("Home")
+    st.write("Your Home page content goes here...")
+
+def run_ai_agent():
+    st.subheader("AI Agent")
+    st.write("Your Forecast360 AI Agent UI goes here...")
+
+# ---------- Apply sidebar visibility & render it if needed ----------
+apply_sidebar_visibility()
+if st.session_state["sidebar_visible"]:
     try:
-        sidebar_getting_started()
+        render_sidebar()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-# Top nav buttons
-col1, col2 = st.columns([1, 1])
-with col1:
-    if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
-        st.session_state["view"] = "Home"
-with col2:
-    if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
-        st.session_state["view"] = "AI Agent"
+# When the sidebar is hidden (AI Agent view), show a small Home button on top bar
+if not st.session_state["sidebar_visible"]:
+    top_c1, top_c2 = st.columns([0.18, 0.82])
+    with top_c1:
+        if st.button("🏠 Home", type="primary", key="top_home_btn"):
+            st.session_state["view"] = "Home"
+            st.session_state["sidebar_visible"] = True
+            st.rerun()
+    with top_c2:
+        st.write("")  # spacer
 
-st.divider()
 
-# Main view
+
+# ---------- Main view ----------
 try:
     if st.session_state["view"] == "Home":
         page_getting_started()
     else:
-        # from forecast360_chat import run as run_ai_agent
         run_ai_agent()
 except Exception as e:
     st.error(f"Error rendering {st.session_state['view']}: {e}")
-
-
-
-
-
-
