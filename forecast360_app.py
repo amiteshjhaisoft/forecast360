@@ -2773,15 +2773,40 @@ def page_getting_started():
 #         st.error(f"Error rendering Getting Started: {e}")
 
 
-# --- app render with BUTTONS ---
+# # --- app render with BUTTONS ---
+# if "view" not in st.session_state:
+#     st.session_state["view"] = "Home"  # default landing on first load
+
+# if st.session_state.get("show_sidebar", True):
+#     try:
+#         sidebar_getting_started()
+#     except Exception as e:
+#         st.sidebar.error(f"Sidebar failed: {e}")
+
+# # Top nav buttons
+# col1, col2 = st.columns([1, 1])
+# with col1:
+#     if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
+#         st.session_state["view"] = "Home"
+# with col2:
+#     if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
+#         st.session_state["view"] = "AI Agent"
+
+# st.divider()
+
+# # Main view
+# try:
+#     if st.session_state["view"] == "Home":
+#         page_getting_started()
+#     else:
+#         # from forecast360_chat import run as run_ai_agent
+#         run_ai_agent()
+# except Exception as e:
+#     st.error(f"Error rendering {st.session_state['view']}: {e}")
+
+# --- app render with BUTTONS (hide sidebar on AI Agent) ---
 if "view" not in st.session_state:
     st.session_state["view"] = "Home"  # default landing on first load
-
-if st.session_state.get("show_sidebar", True):
-    try:
-        sidebar_getting_started()
-    except Exception as e:
-        st.sidebar.error(f"Sidebar failed: {e}")
 
 # Top nav buttons
 col1, col2 = st.columns([1, 1])
@@ -2794,6 +2819,29 @@ with col2:
 
 st.divider()
 
+# Sidebar slot so we can conditionally render it
+sidebar_slot = st.sidebar.empty()
+
+# Hide/Show sidebar based on view
+if st.session_state["view"] == "AI Agent":
+    # Do NOT render sidebar contents and collapse the sidebar visually
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    # Render sidebar normally on Home
+    try:
+        with sidebar_slot:
+            sidebar_getting_started()
+    except Exception as e:
+        st.sidebar.error(f"Sidebar failed: {e}")
+
 # Main view
 try:
     if st.session_state["view"] == "Home":
@@ -2803,3 +2851,4 @@ try:
         run_ai_agent()
 except Exception as e:
     st.error(f"Error rendering {st.session_state['view']}: {e}")
+
