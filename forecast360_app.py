@@ -2780,19 +2780,25 @@ from forecast360_chat import run as run_ai_agent
 # at top
 from forecast360_chat import run as run_ai_agent
 
-# --- app render ---
-if st.session_state.get("show_sidebar"):
+# --- app render with TABS ---
+if st.session_state.get("show_sidebar", True):
     try:
         sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-    view = st.sidebar.radio("View", ["Home", "AI Agent"], index=0)
+# Tabs always default to the first one ("Home")
+tab_home, tab_agent = st.tabs(["Home", "AI Agent"])
 
+with tab_home:
     try:
-        if view == "Home":
-            page_getting_started()
-        else:
-            run_ai_agent()
+        page_getting_started()
     except Exception as e:
-        st.error(f"Error rendering {view}: {e}")
+        st.error(f"Error rendering Home: {e}")
+
+with tab_agent:
+    try:
+        # from forecast360_chat import run as run_ai_agent  # if needed
+        run_ai_agent()
+    except Exception as e:
+        st.error(f"Error rendering AI Agent: {e}")
