@@ -490,6 +490,7 @@ if user_q:
     st.session_state["messages"].append({"role":"assistant","content":reply})
     st.rerun()
 
+
 # --- KB Refresh (Azure Blob -> Weaviate) ---
 with st.container():
     # scope styles to this block only
@@ -502,12 +503,12 @@ with st.container():
         font-size: 14px; line-height: 1;
     }
     </style>
-    <div id="kb-refresh"></div>
     """, unsafe_allow_html=True)
 
-    col_a, col_b = st.columns([1, 0.12)
+    col_a, col_b = st.columns([1, 0.12], gap="small", vertical_alignment="center")
     with col_a:
         st.caption("Knowledge Base: Weaviate ← Azure Blob folder (refresh to re-sync latest files).")
+
     with col_b:
         # icon-only, smallest possible; tooltip via help
         if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
@@ -532,4 +533,5 @@ with st.container():
                     st.toast("Knowledge base refreshed.")
                 except Exception as e:
                     st.error(f"KB refresh failed: {e}")
+#-------------------------------------------------------------------
 
