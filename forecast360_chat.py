@@ -505,7 +505,7 @@ with st.container():
     <div id="kb-refresh"></div>
     """, unsafe_allow_html=True)
 
-    col_a, col_b = st.columns([0.2, 0.8)
+    col_a, col_b = st.columns([1, 0.12)
     with col_a:
         st.caption("Knowledge Base: Weaviate ← Azure Blob folder (refresh to re-sync latest files).")
     with col_b:
