@@ -493,45 +493,63 @@ if user_q:
 
 # --- KB Refresh (Azure Blob -> Weaviate) ---
 with st.container():
-    # scope styles to this block only
+    # scoped styles
     st.markdown("""
     <style>
-    #kb-refresh .stButton>button {
-        width: 28px; height: 28px;
-        min-width: 28px; min-height: 28px;
-        padding: 0; border-radius: 6px;
-        font-size: 14px; line-height: 1;
+    .kb-row { display:flex; align-items:center; gap:10px; }
+    .kb-caption { color: var(--text-color-secondary,#6b6f76); font-size:0.9rem; white-space:nowrap; }
+    .kb-btn .stButton>button {
+        width: 26px; height: 26px; min-width: 26px; min-height: 26px;
+        padding: 0; border-radius: 6px; font-size: 14px; line-height: 1;
+    }
+    .kb-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+    .kb-chip {
+        background: #e7f7ee; color: #147d3f; border: 1px solid #b8ebcf;
+        padding: 2px 8px; border-radius: 999px; font-size: 0.85rem;
+    }
+    @media(max-width: 860px){
+      .kb-caption { max-width: 52vw; overflow:hidden; text-overflow:ellipsis; }
     }
     </style>
     """, unsafe_allow_html=True)
 
-    col_a, col_b = st.columns([1, 0.12], gap="small", vertical_alignment="center")
-    with col_a:
-        st.caption("Knowledge Base: Weaviate ← Azure Blob folder (refresh to re-sync latest files).")
+    # row: caption | button | chips (filled after run)
+    left, mid, right = st.columns([1.0, 0.06, 0.6], vertical_alignment="center")
+    with left:
+        st.markdown('<div class="kb-caption">Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)</div>', unsafe_allow_html=True)
 
-    with col_b:
-        # icon-only, smallest possible; tooltip via help
-        if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
-            with st.spinner("Refreshing…"):
-                try:
-                    stats = sync_from_azure(
-                        st_secrets=st.secrets,
-                        collection_name=COLLECTION_NAME,
-                        container_key="container",
-                        prefix_key="prefix",
-                        embed_model_key=("rag", "embed_model"),
-                        delete_before_upsert=True,
-                        max_docs=None,
-                    )
-                    st.success(
-                        f"Done. Files: {stats['processed_files']} | "
-                        f"Chunks: {stats['inserted_chunks']} | "
-                        f"Cleared: {stats['cleared_sources']} | "
-                        f"Skipped: {stats['skipped_files']}"
-                        + (f" | Local embeddings: {stats['used_embed_model']}" if stats.get("vectorizer_none") else "")
-                    )
-                    st.toast("Knowledge base refreshed.")
-                except Exception as e:
-                    st.error(f"KB refresh failed: {e}")
+    with mid:
+        # icon-only tiny button
+        clicked = st.button("🔄", key="refresh_kb", help="Refresh knowledge base", use_container_width=True)
+
+    chips_slot = right.empty()
+
+    if clicked:
+        with st.spinner("Refreshing knowledge base…"):
+            try:
+                stats = sync_from_azure(
+                    st_secrets=st.secrets,
+                    collection_name=COLLECTION_NAME,
+                    container_key="container",
+                    prefix_key="prefix",
+                    embed_model_key=("rag", "embed_model"),
+                    delete_before_upsert=True,
+                    max_docs=None,
+                )
+                chips_html = f"""
+                <div class="kb-chips">
+                  <span class="kb-chip">Done</span>
+                  <span class="kb-chip">Files: {stats['processed_files']}</span>
+                  <span class="kb-chip">Chunks: {stats['inserted_chunks']}</span>
+                  <span class="kb-chip">Cleared: {stats['cleared_sources']}</span>
+                  <span class="kb-chip">Skipped: {stats['skipped_files']}</span>
+                  {f"<span class='kb-chip'>Embeddings: {stats['used_embed_model']}</span>" if stats.get("vectorizer_none") else ""}
+                </div>
+                """
+                chips_slot.markdown(chips_html, unsafe_allow_html=True)
+                st.toast("Knowledge base refreshed.")
+            except Exception as e:
+                chips_slot.empty()
+                st.error(f"KB refresh failed: {e}")
 #-------------------------------------------------------------------
 
