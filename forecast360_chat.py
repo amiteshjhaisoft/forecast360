@@ -19,8 +19,8 @@ except Exception:
     CrossEncoder = None
 
 # --- Weaviate v4 client (Collections API) ---
-from weaviate import connect_to_weaviate_cloud, AuthApiKey
-from weaviate.collections.classes.query import MetadataQuery
+import weaviate
+import weaviate.classes as wvc  # <- v4 enums/helpers (query.MetadataQuery, init.Auth, etc.)
 
 # ============================ Configuration ============================
 
@@ -53,8 +53,8 @@ PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
 def _connect_weaviate():
     if not WEAVIATE_URL:
         raise RuntimeError("Set [weaviate].url in secrets.")
-    auth = AuthApiKey(api_key=WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
-    client = connect_to_weaviate_cloud(
+    auth = wvc.init.Auth.api_key(WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+    client = weaviate.connect_to_weaviate_cloud(
         cluster_url=WEAVIATE_URL,
         auth_credentials=auth,
         timeout=(15, 120),
@@ -198,7 +198,7 @@ def _search_weaviate(client: Any, class_name: str, text_field: str, source_field
         res = coll.query.near_vector(
             near_vector=qv_list,
             limit=want,
-            return_metadata=MetadataQuery(distance=True)
+            return_metadata=wvc.query.MetadataQuery(distance=True)
         )
         hits = _collect_from_objects(res.objects, text_field, source_field)
         if hits:
@@ -213,7 +213,7 @@ def _search_weaviate(client: Any, class_name: str, text_field: str, source_field
             vector=qv_list,
             alpha=0.6,
             limit=want,
-            return_metadata=MetadataQuery(score=True)
+            return_metadata=wvc.query.MetadataQuery(score=True)
         )
         hits = _collect_from_objects(res.objects, text_field, source_field)
         if hits:
@@ -226,7 +226,7 @@ def _search_weaviate(client: Any, class_name: str, text_field: str, source_field
         res = coll.query.bm25(
             query=query,
             limit=want,
-            return_metadata=MetadataQuery(score=True)
+            return_metadata=wvc.query.MetadataQuery(score=True)
         )
         hits = _collect_from_objects(res.objects, text_field, source_field)
         if hits:
