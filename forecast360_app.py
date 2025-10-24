@@ -2804,27 +2804,38 @@ def page_getting_started():
 # except Exception as e:
 #     st.error(f"Error rendering {st.session_state['view']}: {e}")
 
-# --- app render with BUTTONS (hide sidebar on AI Agent) ---
+# --- app render with BUTTONS + start hidden sidebar ---
+import streamlit as st
+
+# default view and sidebar visibility
 if "view" not in st.session_state:
-    st.session_state["view"] = "Home"  # default landing on first load
+    st.session_state["view"] = "Home"            # default landing
+if "sidebar_visible" not in st.session_state:
+    st.session_state["sidebar_visible"] = False  # START HIDDEN
 
 # Top nav buttons
-col1, col2 = st.columns([1, 1])
+col1, col2, col3 = st.columns([1, 1, 0.15])  # col3 holds the sidebar toggle on Home
 with col1:
     if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
         st.session_state["view"] = "Home"
 with col2:
     if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
         st.session_state["view"] = "AI Agent"
+with col3:
+    # Show a tiny hamburger toggle only on Home
+    if st.session_state["view"] == "Home":
+        if st.button("☰", help="Show/Hide Sidebar"):
+            st.session_state["sidebar_visible"] = not st.session_state["sidebar_visible"]
 
-# st.divider()
+st.divider()
 
-# Sidebar slot so we can conditionally render it
-sidebar_slot = st.sidebar.empty()
+# Decide sidebar visibility:
+# - Always hidden on AI Agent
+# - On Home, controlled by the toggle (defaults to hidden at start)
+sidebar_should_show = (st.session_state["view"] == "Home") and st.session_state["sidebar_visible"]
 
-# Hide/Show sidebar based on view
-if st.session_state["view"] == "AI Agent":
-    # Do NOT render sidebar contents and collapse the sidebar visually
+# Collapse/restore sidebar via CSS + conditional rendering
+if not sidebar_should_show:
     st.markdown(
         """
         <style>
@@ -2835,10 +2846,9 @@ if st.session_state["view"] == "AI Agent":
         unsafe_allow_html=True,
     )
 else:
-    # Render sidebar normally on Home
+    # Render your sidebar only when visible
     try:
-        with sidebar_slot:
-            sidebar_getting_started()
+        sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
@@ -2851,4 +2861,5 @@ try:
         run_ai_agent()
 except Exception as e:
     st.error(f"Error rendering {st.session_state['view']}: {e}")
+
 
