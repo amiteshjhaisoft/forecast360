@@ -1,31 +1,6 @@
 # Author: Amitesh Jha | iSoft
 # Forecast360 AI Agent — Strict RAG (Weaviate collection: Forecast360) → (optional) Claude
-# - Uses existing Weaviate collection "Forecast360"
-# - No crawling / indexing logic (removed)
-# - Same Streamlit chat interface you had before (polite, grounded, no citations)
-# - Retrieval: near-vector (MiniLM by default) with hybrid + bm25 fallbacks
-# - Optional CrossEncoder reranker (graceful if missing)
-#
-# Expected secrets in .streamlit/secrets.toml:
-# [weaviate]
-# url = "https://YOUR-CLUSTER.weaviate.network"   # or "http://localhost:8080"
-# api_key = "YOUR-WEAVIATE-API-KEY"               # omit if none
-# collection = "Forecast360"                       # REQUIRED
-#
-# [rag]
-# embed_model = "sentence-transformers/all-MiniLM-L6-v2"
-# top_k = 8
-#
-# [anthropic]                # optional; if absent, agent will answer with extracted snippets
-# api_key = "sk-ant-..."
-# model = "claude-sonnet-4-5"
-#
-# [ui]                       # optional
-# assistant_icon = "assets/forecast360.png"
-# user_icon = "assets/avatar.png"
-# page_icon = "assets/forecast360.png"
-# page_title = "Forecast360 AI Agent"
-
+# v4 Weaviate client compatible
 
 from __future__ import annotations
 import os, re, json, itertools
@@ -43,11 +18,9 @@ try:
 except Exception:
     CrossEncoder = None
 
-# --- Weaviate v3 client (works with Weaviate Cloud/local); keeps code simple ---
-try:
-    import weaviate
-except ImportError:
-    weaviate = None  # we'll error nicely later
+# --- Weaviate v4 client (Collections API) ---
+from weaviate import connect_to_weaviate_cloud, AuthApiKey
+from weaviate.collections.classes.query import MetadataQuery
 
 
 # ============================ Configuration ============================
@@ -79,28 +52,22 @@ PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
 
 # ============================ Helpers ============================
 
-def _normalize_weaviate_url(raw: str) -> str:
-    raw = (raw or "").strip()
-    if not raw:
-        return ""
-    if not raw.startswith(("http://", "https://")):
-        raw = "http://" + raw
-    return raw.rstrip("/")
-
-def _connect_weaviate() -> Any:
-    if not weaviate:
-        raise RuntimeError("Missing dependency: install 'weaviate-client>=3.25,<4'.")
-    url = _normalize_weaviate_url(WEAVIATE_URL)
-    if not url:
-        raise RuntimeError("Set [weaviate].url in .streamlit/secrets.toml")
-    auth = weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
-    client = weaviate.Client(url=url, auth_client_secret=auth, timeout_config=(15,120), startup_period=45)
-    # Health check
+def _connect_weaviate():
+    if not WEAVIATE_URL:
+        raise RuntimeError("Set [weaviate].url in secrets.")
+    auth = AuthApiKey(api_key=WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+    client = connect_to_weaviate_cloud(
+        cluster_url=WEAVIATE_URL,
+        auth_credentials=auth,
+        timeout=(15, 120),
+    )
+    # quick check: make sure the collection exists
     try:
-        client.schema.get()
+        _ = client.collections.get(COLLECTION_NAME)
     except Exception as e:
-        raise RuntimeError(f"Weaviate not reachable/healthy: {e}")
+        raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or client unreachable: {e}")
     return client
+
 
 @st.cache_resource(show_spinner=False)
 def _load_embed_model(name: str) -> SentenceTransformer:
@@ -118,44 +85,46 @@ def _load_reranker():
 RERANKER = _load_reranker()
 
 
-# ============= Introspective schema helpers (be resilient to field names) =============
+# ============= Introspective schema helpers (v4 Collections) =============
 
 def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
     """
-    Try to infer the main text field and a source/url-like field from schema.
-    Prefers names: text/content/body/chunk for text; url/source/path/file/page for source.
+    Infer the main text field and an optional source/url-like field using v4 collection config.
+    Prefers names: text/content/body/chunk for text; url/source/page/path/file/document/uri for source.
+    Falls back to ("text","url") if unknown.
     """
+    text_field = None
+    source_field = None
     try:
-        sch = client.schema.get() or {}
-        classes = sch.get("classes", [])
-        for c in classes:
-            if (c.get("class") or "").strip() == class_name:
-                props = c.get("properties", []) or []
-                names = [p.get("name","") for p in props]
-                # pick text-like
-                text_candidates_priority = ["text","content","body","chunk","passage","document","value"]
-                text_field = None
-                for n in text_candidates_priority:
-                    if n in names:
-                        text_field = n; break
-                if not text_field:
-                    # fall back to first 'text' datatype prop
-                    for p in props:
-                        if "text" in [dt.lower() for dt in (p.get("dataType") or [])]:
-                            text_field = p.get("name"); break
-                # pick source-like
-                source_candidates_priority = ["url","source","page","path","file","document","uri"]
-                source_field = None
-                for n in source_candidates_priority:
-                    if n in names:
-                        source_field = n; break
-                return text_field or "text", source_field  # source_field can be None
+        coll = client.collections.get(class_name)
+        cfg = coll.config.get()  # CollectionConfig
+        props = getattr(cfg, "properties", []) or []
+        names = [getattr(p, "name", "") for p in props]
+
+        # text-like
+        for cand in ["text","content","body","chunk","passage","document","value"]:
+            if cand in names:
+                text_field = cand
+                break
+        if not text_field:
+            # fallback to any property whose data type includes 'text'
+            for p in props:
+                dts = [str(dt).lower() for dt in (getattr(p, "data_type", []) or [])]
+                if any("text" in dt for dt in dts):
+                    text_field = getattr(p, "name", None)
+                    if text_field: break
+
+        # source-like
+        for cand in ["url","source","page","path","file","document","uri"]:
+            if cand in names:
+                source_field = cand
+                break
     except Exception:
         pass
-    return "text", "url"
+    return (text_field or "text", source_field)
 
 
-# ============================ Retrieval ============================
+# ============================ Retrieval (v4) ============================
 
 def _sent_split(text: str) -> List[str]:
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -197,53 +166,85 @@ def _apply_reranker(query: str, candidates: List[Dict[str,Any]], topk: int) -> L
         candidates.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return candidates[:topk]
 
+def _collect_from_objects(objs, text_field: str, source_field: Optional[str]) -> List[Dict[str,Any]]:
+    out: List[Dict[str,Any]] = []
+    if not objs:
+        return out
+    for o in objs:
+        props = getattr(o, "properties", {}) or {}
+        text_val = str(props.get(text_field, "") or "")
+        if not text_val.strip():
+            continue
+        src_val = str(props.get(source_field, "") or "") if source_field else ""
+        # distance/score if provided by query type
+        md = getattr(o, "metadata", None)
+        score_val = None
+        if md is not None:
+            # distance (near_vector) -> convert to similarity
+            dist = getattr(md, "distance", None)
+            if isinstance(dist, (int, float)):
+                score_val = 1.0 - float(dist)  # rough similarity
+            # score (hybrid/bm25)
+            sc = getattr(md, "score", None)
+            if isinstance(sc, (int, float)) and (score_val is None or sc > score_val):
+                score_val = float(sc)
+        out.append({"text": text_val, "source": src_val, "score": score_val or 0.0})
+    return out
+
 def _search_weaviate(client: Any, class_name: str, text_field: str, source_field: Optional[str],
                      embedder: SentenceTransformer, query: str, k: int) -> List[Dict[str,Any]]:
     """
-    Try near-vector → hybrid → bm25. Collect text + source and an internal cosine score.
+    v4 query flow: near_vector → hybrid → bm25
     """
+    want = max(k, 24)
+    coll = client.collections.get(class_name)
+
+    # Prepare query vector
     qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32")
     qv_list = qv.tolist()
 
-    fields = [text_field]
-    if source_field:
-        fields.append(source_field)
-
-    base = client.query.get(class_name, fields + ["_additional { distance vector }"])
-
-    def _run(build):
-        try:
-            res = build.do()
-            return res["data"]["Get"][class_name]
-        except Exception:
-            return []
-
-    want = max(k, 24)
-
     # 1) near-vector
-    hits = _run(base.with_near_vector({"vector": qv_list}).with_limit(want))
-    # 2) hybrid (vector + keyword)
-    if not hits:
-        hits = _run(base.with_hybrid(query=query, vector=qv_list, alpha=0.6).with_limit(want))
-    # 3) bm25 as last fallback
-    if not hits:
-        hits = _run(base.with_bm25(query=query).with_limit(want))
+    try:
+        res = coll.query.near_vector(
+            near_vector=qv_list,
+            limit=want,
+            return_metadata=MetadataQuery(distance=True)
+        )
+        hits = _collect_from_objects(res.objects, text_field, source_field)
+        if hits:
+            return hits
+    except Exception:
+        pass
 
-    out = []
-    for h in hits:
-        add = h.get("_additional", {}) or {}
-        vec = add.get("vector")
-        if vec is None:
-            continue
-        v = np.asarray(vec, dtype="float32")
-        v /= (np.linalg.norm(v) + 1e-12)
-        score = float(v @ (qv / (np.linalg.norm(qv) + 1e-12)))
-        text_val = h.get(text_field, "") or ""
-        src_val  = h.get(source_field, "") if source_field else ""
-        if not str(text_val).strip():
-            continue
-        out.append({"text": str(text_val), "source": str(src_val or ""), "score": score})
-    return out
+    # 2) hybrid (vector + keyword)
+    try:
+        res = coll.query.hybrid(
+            query=query,
+            vector=qv_list,
+            alpha=0.6,
+            limit=want,
+            return_metadata=MetadataQuery(score=True)
+        )
+        hits = _collect_from_objects(res.objects, text_field, source_field)
+        if hits:
+            return hits
+    except Exception:
+        pass
+
+    # 3) bm25 fallback
+    try:
+        res = coll.query.bm25(
+            query=query,
+            limit=want,
+            return_metadata=MetadataQuery(score=True)
+        )
+        hits = _collect_from_objects(res.objects, text_field, source_field)
+        if hits:
+            return hits
+    except Exception:
+        pass
+
+    return []
 
 def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[Dict[str,Any]]:
     model = _load_embed_model(EMB_MODEL_NAME)
@@ -284,7 +285,8 @@ Context:
 """
 
 def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]:
-    if not (ANTHROPIC_KEY and os.getenv("ANTHROPIC_API_KEY")):
+    key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
+    if not key:
         return None
     try:
         import anthropic as _anthropic
@@ -292,9 +294,9 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
         return None
     prompt = SYNTHESIS_PROMPT_TEMPLATE.format(question=question, ctx="\n".join(f"- {c}" for c in context_blocks))
     try:
-        client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        client = _anthropic.Anthropic(api_key=key)
         msg = client.messages.create(
-            model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            model=os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
             system=COMPANY_RULES,
             max_tokens=500,
             temperature=0.0,
