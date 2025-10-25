@@ -1,30 +1,67 @@
-# Core app
-streamlit==1.39.1
-pandas==2.3.3
-numpy==2.3.3
-pyarrow==18.1.0
-matplotlib==3.9.4
-plotly==5.24.1
-pillow==10.4.0          # <-- downgraded to satisfy streamlit<1.40
-python-dateutil==2.9.0.post0
-lxml==5.4.0
-openpyxl==3.1.5
-xlrd==2.0.2
-jsonschema==4.25.1
+# ---------- Streamlit app ----------
+streamlit>=1.33
+Pillow
 
-# ML stack
-scikit-learn==1.5.2
-statsmodels==0.14.5
+# ---------- Data / compute ----------
+numpy
+pandas
+pyarrow               # needed for pd.read_parquet even if not imported directly
+openpyxl              # .xlsx
+xlrd==1.2.0           # legacy .xls support (this pin supports .xls)
 
-# ---- Optional (commented) ----
-# Auto-ARIMA can be slow to build on Cloud:
-# pmdarima==2.0.4
+# ---------- Visualization ----------
+matplotlib
 
-# DI/vector deps (only add if you re-enable those features):
-# openai==1.109.1
-# anthropic==0.69.0
-# tiktoken==0.7.0
-# langchain==0.2.17
-# langchain-community==0.2.19
-# For FAISS on Py3.13, use a modern wheel:
-# faiss-cpu==1.11.0
+# ---------- Azure Blob sync (used by kb_sync_azure.py) ----------
+azure-storage-blob>=12.22.0
+azure-identity>=1.17.1
+
+# ---------- Optional: enable only if you use these features ----------
+# plotly                     # if you switch charts back to Plotly
+# python-dotenv             # if you load env vars from a .env file
+# requests
+# httpx
+# pypdf                     # PDF parsing
+# beautifulsoup4
+# lxml
+# python-pptx
+# docx2txt
+# PyYAML
+# python-magic; platform_system!="Windows"
+# python-magic-bin; platform_system=="Windows"
+
+# --- Time-series / ML (uncomment when models are wired in the UI) ---
+# scikit-learn
+# statsmodels
+# scipy
+# pmdarima
+# prophet                  # heavy; needs compiler toolchain
+# tbats
+# xgboost
+# lightgbm
+# darts                    # heavy; pulls torch & lightning
+
+# --- RAG / Vector / LLM (only if you actually use them) ---
+# langchain-core>=0.2.14,<0.3
+# langchain-community>=0.2.14,<0.3
+# langchain-text-splitters>=0.2.0,<0.3
+# langchain-anthropic>=0.1.0
+# langgraph>=0.2.0
+# faiss-cpu>=1.8; platform_system!="Windows"  # on Windows prefer Conda or skip
+# sentence-transformers>=3.0                  # pulls torch
+# torch                                      # CPU build is fine
+# anthropic>=0.34
+weaviate-client>=4.9.0
+weaviate-agents>=0.0.8
+
+# langsmith
+
+
+
+anthropic>=0.34
+
+
+sentence-transformers>=3.0,<6.0
+
+
+# MetadataQuery

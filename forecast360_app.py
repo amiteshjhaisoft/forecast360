@@ -1,30 +1,141 @@
 # Author: Amitesh Jha | iSOFT
 
-from __future__ import annotations
+# from __future__ import annotations
+
+# # ---- Standard Library
+# import os
+# import sys
+# import io
+# import re
+# import json
+# import time
+# import base64
+# import hashlib
+# import logging
+# import shutil
+# import tempfile
+# from pathlib import Path
+# from dataclasses import dataclass
+# from typing import Any, Dict, List, Optional, Tuple, Union, Iterable, Literal
+# from datetime import datetime
+# import pytz
+
+# # ---- Environment / Config
+# from dotenv import load_dotenv
+
+# # ---- Web / IO utilities
+# import requests
+# import httpx
+
+# # ---- Streamlit UI
+# import streamlit as st
+
+# # ---- Core Data
+# import numpy as np
+# import pandas as pd
+# import pyarrow as pa
+
+# # ---- Visualization
+# import matplotlib.pyplot as plt
+# import plotly.express as px
+# import plotly.graph_objects as go
+# from PIL import Image
+
+# # ---- File Parsing / Ingestion
+# from pypdf import PdfReader
+# import openpyxl          # .xlsx reader
+# import xlrd              # .xls reader
+# # import pyxlsb          # .xlsb (enable if you actually use it)
+# import yaml
+# import csv
+# import zipfile
+
+# # ---- Classic ML / Stats
+# from sklearn.model_selection import train_test_split
+# from sklearn.metrics.pairwise import cosine_similarity
+# from sklearn.feature_extraction.text import TfidfVectorizer
+# import statsmodels.api as sm
+
+# # ===========================
+# # LangChain / LangGraph stack
+# # ===========================
+
+# # ---- LangChain Core
+# from langchain_core.documents import Document
+# from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+# from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain_core.runnables import (
+#     Runnable,
+#     RunnableMap,
+#     RunnableLambda,
+#     RunnableParallel,
+# )
+# from langchain_core.callbacks import BaseCallbackHandler
+
+# # ---- Text Splitters & Loaders (only those that match installed deps)
+# from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_community.document_loaders import (
+#     PyPDFLoader,
+#     TextLoader,
+#     CSVLoader,
+#     JSONLoader,
+#     # UnstructuredExcelLoader,          # requires 'unstructured' (not installed)
+#     # UnstructuredHTMLLoader,           # requires 'unstructured' (not installed)
+# )
+
+# # ---- Vector Store (FAISS) & Embeddings
+# from langchain_community.vectorstores import FAISS
+
+# # Guarded: HuggingFaceEmbeddings typically needs sentence-transformers/torch.
+# # Keep optional so import doesn't crash if those aren't installed.
+# try:
+#     from langchain_community.embeddings import HuggingFaceEmbeddings  # optional
+# except Exception:  # pragma: no cover
+#     HuggingFaceEmbeddings = None  # type: ignore
+
+# # ---- Claude (only) LLM
+# from langchain_anthropic import ChatAnthropic
+
+# # ---- Tools / Agents (optional)
+# # --- compatibility import for LangChain Tool ---
+# try:
+#     # Newer LangChain (>= 0.2.x)
+#     from langchain_core.tools import Tool
+# except Exception:
+#     try:
+#         # Mid-era
+#         from langchain.tools import Tool
+#     except Exception:
+#         # Older LangChain
+#         from langchain.agents import Tool
+
+# # from langchain.agents import AgentExecutor, create_react_agent
+
+# # ---- Memory / History
+# from langchain.memory import ChatMessageHistory
+# from langchain_core.chat_history import BaseChatMessageHistory
+# from langchain_core.runnables.history import RunnableWithMessageHistory
+
+# # ---- LangGraph (state graph for agents / workflows)
+# from langgraph.graph import StateGraph, END
+# from langgraph.checkpoint.memory import MemorySaver
+
+# # ---- Tracing / Observability (optional)
+# try:
+#     from langsmith import Client as LangSmithClient
+# except Exception:
+#     LangSmithClient = None  # type: ignore
 
 # ---- Standard Library
 import os
-import sys
 import io
 import re
 import json
-import time
 import base64
-import hashlib
-import logging
-import shutil
-import tempfile
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable, Literal
+from typing import Any, Dict, Optional
 from datetime import datetime
-
-# ---- Environment / Config
-from dotenv import load_dotenv
-
-# ---- Web / IO utilities
-import requests
-import httpx
 
 # ---- Streamlit UI
 import streamlit as st
@@ -32,88 +143,333 @@ import streamlit as st
 # ---- Core Data
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 
 # ---- Visualization
 import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
 from PIL import Image
 
-# ---- File Parsing / Ingestion
-from pypdf import PdfReader
-import openpyxl          # .xlsx reader
-import xlrd              # .xls reader
-# import pyxlsb          # .xlsb (enable if you actually use it)
-import yaml
-import csv
-import zipfile
 
-# ---- Classic ML / Stats
-from sklearn.model_selection import train_test_split
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.feature_extraction.text import TfidfVectorizer
-import statsmodels.api as sm
 
-# ===========================
-# LangChain / LangGraph stack
-# ===========================
 
-# ---- LangChain Core
-from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import (
-    Runnable,
-    RunnableMap,
-    RunnableLambda,
-    RunnableParallel,
-)
-from langchain_core.callbacks import BaseCallbackHandler
+from kb_capture import KBCapture, kb_set_block
+from kb_sync_azure import sync_folder_to_blob
 
-# ---- Text Splitters & Loaders (only those that match installed deps)
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-    CSVLoader,
-    JSONLoader,
-    # UnstructuredExcelLoader,          # requires 'unstructured' (not installed)
-    # UnstructuredHTMLLoader,           # requires 'unstructured' (not installed)
-)
+# AI Agent
+from forecast360_chat import run as run_ai_agent
 
-# ---- Vector Store (FAISS) & Embeddings
-from langchain_community.vectorstores import FAISS
+# Patch once so ALL renders/uploads are captured
+if "kb" not in st.session_state:
+    st.session_state.kb = KBCapture(folder_name="KB").patch()  # <- no keep_last
+kb = st.session_state.kb
 
-# Guarded: HuggingFaceEmbeddings typically needs sentence-transformers/torch.
-# Keep optional so import doesn't crash if those aren't installed.
-try:
-    from langchain_community.embeddings import HuggingFaceEmbeddings  # optional
-except Exception:  # pragma: no cover
-    HuggingFaceEmbeddings = None  # type: ignore
+# ======================= Forecast360 — Unified Tooltips (widgets + content) =======================
+# Paste once after st.set_page_config(...) or right after `import streamlit as st`
 
-# ---- Claude (only) LLM
-from langchain_anthropic import ChatAnthropic
+import html
+import streamlit as st
+from typing import Any, Callable, Dict, Optional
 
-# ---- Tools / Agents (optional)
-from langchain.tools import Tool
-from langchain.agents import AgentExecutor, create_react_agent
+# ------------------------------- 1) WIDGET TOOLTIP PATCH ---------------------------------
 
-# ---- Memory / History
-from langchain.memory import ChatMessageHistory
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.runnables.history import RunnableWithMessageHistory
+# Exact label -> tooltip (aligned to labels used in this app)
+_TOOLTIP_MAP: Dict[str, str] = {
+    # Upload & parsing
+    "Upload CSV / Excel / JSON / Parquet / XML":
+        "Upload a single data file. Supported: CSV, Excel, JSON, Parquet, XML.",
+    "XML row path (optional XPath)":
+        "XPath pointing at each repeated record node. Examples: .//row, .//record, or .//item.",
+    "Date/Time column (auto-detected)":
+        "The timestamp column used to order/index your time series.",
+    "Target column (numeric, auto-detected)":
+        "Numeric measure to analyse and forecast (e.g., Sales, Demand).",
 
-# ---- LangGraph (state graph for agents / workflows)
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+    # Resampling & missing data
+    "Resample frequency":
+        "Resample by SUM to D/W/M/Q; choose 'raw' to keep original granularity.",
+    "Missing values":
+        "How to handle gaps after resampling or in raw data.",
+    "Constant value (for missing)":
+        "Used only when Missing values = constant. Fills all gaps with this number.",
 
-# ---- Tracing / Observability (optional)
-try:
-    from langsmith import Client as LangSmithClient
-except Exception:
-    LangSmithClient = None  # type: ignore
+    # Exogenous features
+    "🧩 Exogenous features (for ARIMAX/SARIMAX/Auto_ARIMA/Tree/TFT)":
+        "Optional driver variables (calendar features, chosen columns, and lags).",
+    "Use calendar features (dow, month, month-start/end, weekend)":
+        "Adds calendar features aligned to the series index.",
+    "Exog columns by name (comma or JSON list)":
+        "Driver columns from your dataset (e.g., price, promo). Use comma or JSON list.",
+    "Scale exog":
+        "Standardize exogenous features (mean 0, std 1) for stability.",
+    "Exog lags":
+        "Create lagged versions of exogenous features (0 keeps contemporaneous).",
+    "Additional numeric exogenous columns (optional)":
+        "Pick extra numeric columns to include as drivers.",
+
+    # Pattern, transforms, outliers
+    "Additive vs Multiplicative pattern":
+        "Multiplicative if variability rises with the level; otherwise additive.",
+    "Seasonal period (m)":
+        "Seasonal cycle length: 'auto' or explicit (e.g., 7, 12, 24, 52, 365).",
+    "Target transform":
+        "Variance-stabilizing transform (log1p/Box–Cox); reversed for outputs.",
+    "Winsorize outliers":
+        "Clip extremes to reduce outlier impact.",
+    "Outlier z-threshold (z)":
+        "Higher z keeps more extremes (e.g., 3.5 = fairly tolerant).",
+
+    # CV / holdout
+    "Folds":
+        "Number of rolling-origin folds for backtesting.",
+    "Horizon (H)":
+        "Forecast steps per fold (evaluation window).",
+    "Gap":
+        "Gap between train end and test start to reduce leakage.",
+    "Metrics":
+        "Primary/secondary error metrics to evaluate models.",
+
+    # Models (selectors)
+    "ARMA": "Autoregressive Moving Average (non-differenced).",
+    "ARIMA": "ARIMA(p,d,q) with differencing (univariate).",
+    "ARIMAX": "ARIMA with exogenous regressors.",
+    "SARIMA": "Seasonal ARIMA with seasonal orders (univariate).",
+    "SARIMAX": "Seasonal ARIMA with exogenous regressors.",
+    "Auto_ARIMA": "Auto-selects ARIMA/SARIMA orders.",
+    "HWES": "Exponential smoothing (trend/seasonal).",
+    "Prophet": "Additive model with trend/seasonality/holidays.",
+    "TBATS": "Multiple/long seasonalities.",
+    "XGBoost": "Gradient-boosted trees with lag/covariates.",
+    "LightGBM": "LightGBM regressor with lag/covariates.",
+    "TFT": "Temporal Fusion Transformer (via Darts).",
+
+    # Per-model knobs
+    "p (ARMA)": "AR order (autoregressive terms).",
+    "q (ARMA)": "MA order (moving-average terms).",
+    "trend (ARMA)": "Deterministic trend: n=None, c=const, t=trend, ct=both.",
+    "p (ARIMA)": "AR order.",
+    "d (ARIMA)": "Differencing order.",
+    "q (ARIMA)": "MA order.",
+    "trend (ARIMA)": "Deterministic trend for ARIMA.",
+    "p": "Non-seasonal AR order.",
+    "d": "Non-seasonal differencing.",
+    "q": "Non-seasonal MA order.",
+    "P": "Seasonal AR order.",
+    "D": "Seasonal differencing.",
+    "Q": "Seasonal MA order.",
+    "m (SARIMA)": "Seasonal period (m). 'auto' uses detected/chosen m.",
+    "trend": "Deterministic trend component.",
+    "m (SARIMAX)": "Seasonal period (m).",
+    "seasonal_periods (JSON list)":
+        "TBATS seasonal periods, e.g., [7, 365.25].",
+
+    # XGB / LGBM knobs
+    "n_estimators": "Number of boosting trees.",
+    "max_depth": "Maximum tree depth (complexity).",
+    "learning_rate": "Shrinkage rate; lower is safer but needs more trees.",
+    "subsample": "Row sampling fraction per tree.",
+    "colsample_bytree": "Feature sampling fraction per tree.",
+    "reg_alpha": "L1 regularization (sparsity).",
+    "reg_lambda": "L2 regularization (stability).",
+    "num_leaves": "Max leaves per LightGBM tree.",
+    "feature_fraction": "Feature sampling per LightGBM tree.",
+    "bagging_fraction": "Row sampling per LightGBM iteration.",
+    "bagging_freq": "How often to bag (0=off).",
+    "lambda_l1": "L1 regularization (LightGBM).",
+    "lambda_l2": "L2 regularization (LightGBM).",
+    "min_data_in_leaf": "Minimum samples per leaf.",
+
+    # Profile / viz
+    "Preview rows": "How many rows to preview (max 25).",
+    "Numeric": "Numeric column for the boxplot.",
+    "Category": "Categorical column used to group values.",
+    "Palette": "Matplotlib palette for boxplot categories.",
+    "Method": "Correlation method: Pearson, Spearman, or Kendall.",
+    "Show heatmap": "Toggle the correlation heatmap.",
+    "Columns (optional subset)": "Limit correlation to selected numeric columns.",
+}
+
+def _infer_tooltip(label: Any) -> str:
+    if not label:
+        return "Hover for guidance on how this input affects the analysis."
+    lab = str(label).strip()
+    if lab in _TOOLTIP_MAP:
+        return _TOOLTIP_MAP[lab]
+    l = lab.lower()
+    if "xpath" in l:
+        return "XPath to each repeated record node (e.g., .//row, .//record, .//item)."
+    if any(k in l for k in ("date", "time", "timestamp")):
+        return "Select the timestamp column used as the index."
+    if any(k in l for k in ("target", "value", "measure", "y ")):
+        return "Numeric measure to model and forecast."
+    if "freq" in l or "resample" in l:
+        return "Sampling frequency (D/W/M/Q). Choose 'raw' to keep original."
+    if "horizon" in l or "steps" in l:
+        return "Number of periods to forecast ahead."
+    if "season" in l and ("(m)" in l or l.strip() in {"m", "seasonal period", "seasonal_periods"}):
+        return "Seasonal cycle length (e.g., 7 weekly, 12 monthly)."
+    if any(k in l for k in ("upload", "file", "data")):
+        return "Upload a data file (CSV/Excel/JSON/Parquet/XML)."
+    if any(k in l for k in ("exog", "feature", "driver")):
+        return "Optional driver variables aligned with the series; can be lagged and scaled."
+    if "missing" in l:
+        return "How gaps are handled (forward/backfill, interpolation, constant, etc.)."
+    if "metric" in l:
+        return "Error metrics used to compare models."
+    if "palette" in l:
+        return "Pick a matplotlib palette for category colors."
+    return "Hover for guidance on how this input affects the analysis."
+
+def _with_default_help(fn: Callable[..., Any]) -> Callable[..., Any]:
+    def wrapped(label: Any, *args: Any, **kwargs: Any) -> Any:
+        if not kwargs.get("help"):
+            kwargs["help"] = _infer_tooltip(label)
+        return fn(label, *args, **kwargs)
+    return wrapped
+
+def install_unified_tooltips() -> None:
+    """Patch common Streamlit inputs with default help= tooltips (idempotent)."""
+    if getattr(st.session_state, "_tooltips_patched", False):
+        return
+    for _name in (
+        "text_input", "number_input", "selectbox", "multiselect", "checkbox",
+        "slider", "date_input", "file_uploader", "radio", "text_area",
+        "time_input", "select_slider"
+    ):
+        if hasattr(st, _name):
+            setattr(st, _name, _with_default_help(getattr(st, _name)))
+    st.session_state["_tooltips_patched"] = True
+
+# ------------------------------- 2) CONTENT TOOLTIP PATCH ---------------------------------
+
+# Map for Getting Started / content sections
+_CONTENT_TOOLTIP_MAP: Dict[str, str] = {
+    "Getting Started": "Quick steps to ingest data, profile it, and run forecasts.",
+    "Upload Data": "Load CSV/Excel/JSON/Parquet/XML to begin analysis.",
+    "Data Preview": "A quick look at your dataset to confirm parsing and columns.",
+    "Profiling": "Basic stats, missingness, and distributions.",
+    "Visualization": "Exploratory plots to spot trends, seasonality, and outliers.",
+    "Exogenous Features": "Optional drivers (calendar/features) to enrich models.",
+    "Backtesting": "Rolling-origin evaluation to estimate real forecast accuracy.",
+    "Models": "Choose and configure models to compare performance.",
+    "Forecasts": "Generate predictions with confidence intervals.",
+    "Knowledge Base": "Captures artifacts (tables/figs/html) into the KB folder.",
+}
+
+def _infer_content_tooltip(text: Any) -> str:
+    if not text:
+        return "Section description and usage tips."
+    s = str(text).strip()
+    if s in _CONTENT_TOOLTIP_MAP:
+        return _CONTENT_TOOLTIP_MAP[s]
+    l = s.lower()
+    if any(k in l for k in ("upload", "ingest", "load")):
+        return "Provide a supported file to begin (CSV/Excel/JSON/Parquet/XML)."
+    if any(k in l for k in ("preview", "sample", "head")):
+        return "Preview your data to verify parsing and column types."
+    if any(k in l for k in ("profile", "profiling", "summary", "describe")):
+        return "Data profile: types, missingness, basic stats, and distributions."
+    if any(k in l for k in ("visual", "chart", "plot", "graph", "heatmap")):
+        return "Exploratory visualizations to spot trends and outliers."
+    if any(k in l for k in ("exog", "feature", "driver", "covariate")):
+        return "Optional driver variables aligned to your time index; can be lagged."
+    if any(k in l for k in ("backtest", "cv", "fold", "validation", "holdout")):
+        return "Rolling-origin evaluation to estimate out-of-sample accuracy."
+    if any(k in l for k in ("model", "arima", "prophet", "xgboost", "lightgbm", "tft", "sarima")):
+        return "Model selection/tuning for your time series forecasting."
+    if any(k in l for k in ("forecast", "prediction", "horizon", "interval")):
+        return "Generate future values with uncertainty bounds."
+    if any(k in l for k in ("knowledge base", "kb", "snapshot")):
+        return "Persist artifacts into the Knowledge Base for RAG/DI."
+    return "Section description and usage tips."
+
+def _esc(x: Any) -> str:
+    return html.escape(str(x), quote=True)
+
+def _patch_heading_api() -> None:
+    """Monkey-patch title/header/subheader to render with native browser tooltip (idempotent)."""
+    if getattr(st.session_state, "_content_tooltips_headings_patched", False):
+        return
+
+    def _mk_heading_wrapper(tag: str) -> Callable[..., Any]:
+        def _wrapped(body: Any, *args, **kwargs) -> None:
+            tooltip: Optional[str] = kwargs.pop("tooltip", None)
+            tip = tooltip or _infer_content_tooltip(body)
+            st.markdown(
+                f'<{tag} class="f360-heading" title="{_esc(tip)}">{_esc(body)}</{tag}>',
+                unsafe_allow_html=True,
+            )
+        return _wrapped
+
+    # Patch headings
+    st.title     = _mk_heading_wrapper("h1")   # type: ignore[assignment]
+    st.header    = _mk_heading_wrapper("h2")   # type: ignore[assignment]
+    st.subheader = _mk_heading_wrapper("h3")   # type: ignore[assignment]
+
+    # Subtle CSS hint for hover
+    st.markdown(
+        """
+        <style>
+          .f360-heading[title] { cursor: help; }
+          .f360-md-tip { display:inline-block; margin-left:.35rem; cursor:help; user-select:none; }
+          .f360-md-tip:hover { opacity:.85; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state["_content_tooltips_headings_patched"] = True
+
+def md(markdown_text: str, tooltip: Optional[str] = None, **st_markdown_kwargs: Any) -> None:
+    """
+    Render markdown plus an inline info glyph `ⓘ` that shows a tooltip on hover.
+    Usage: md("**Step 1:** Upload Data", tooltip="Supported: CSV/Excel/JSON/Parquet/XML.")
+    """
+    st.markdown(markdown_text, **st_markdown_kwargs)
+    tip = tooltip or _infer_content_tooltip(markdown_text)
+    st.markdown(f'<span class="f360-md-tip" title="{_esc(tip)}">ⓘ</span>', unsafe_allow_html=True)
+
+def install_content_tooltips() -> None:
+    _patch_heading_api()
+
+# ------------------------------- 3) INSTALL BOTH PATCHES ---------------------------------
+install_unified_tooltips()     # widget tooltips
+install_content_tooltips()     # title/header/subheader + md() helper
+# ======================= /end Forecast360 — Unified Tooltips =======================
+
+
+
+def render_kb_footer():
+    """
+    Hardcoded KB footer (no button):
+    - Enforces folder=KB, keep_last=3, ai_summary=True
+    - Auto-flushes once per render *only if new items were captured*
+    """
+    kb = st.session_state.get("kb")
+    if kb is None:
+        st.warning("KB capture is not initialized.")
+        return
+
+    # Enforce constants (hard lock)
+    kb.folder_name = "KB"
+    kb.keep_last   = 30 # <- fixed
+
+    st.markdown("### 📦 Knowledge Base Snapshot")
+    st.caption("Auto-saving this page’s captured uploads, tables, and plots…")
+
+    # only flush if something new appeared since last flush
+    items = getattr(kb, "_items", [])
+    if not items:
+        st.info("Nothing to save yet.")
+        return
+
+    last_ts = items[-1].ts if hasattr(items[-1], "ts") else ""
+    sig = f"{len(items)}::{last_ts}"
+
+    if st.session_state.get("_kb_last_sig") == sig:
+        st.caption("No changes since last snapshot.")
+        return
+
+    out_dir = kb.flush(ai_summary=True)
+    st.session_state["_kb_last_sig"] = sig
+    st.success(f"Snapshot saved to: {out_dir}")
 
 
 
@@ -281,10 +637,24 @@ def sidebar_getting_started():
     with st.sidebar:
         # ---- Branding --------------------------------------------------------
         if Path("assets/logo.png").exists():
-            st.image("assets/logo.png", caption="iSOFT ANZ Pvt Ltd",use_container_width=True)
+            st.image("assets/logo.png", caption="iSOFT ANZ Pvt Ltd", use_container_width=True)
 
         st.subheader("🚀 Getting Started")
 
+        # # ---- Data Upload -----------------------------------------------------
+        # st.header("📂 Data Upload")
+        # up = st.file_uploader(
+        #     "Upload CSV / Excel / JSON / Parquet / XML",
+        #     type=ACCEPTED_EXTS,
+        #     accept_multiple_files=False,
+        #     key="gs_file",
+        # )
+        # xml_xpath = st.text_input(
+        #     "XML row path (optional XPath)",
+        #     value=st.session_state.get("xml_xpath", ""),
+        #     help="e.g., .//row  or  .//record  or  .//item",
+        #     key="xml_xpath",
+        # )
         # ---- Data Upload -----------------------------------------------------
         st.header("📂 Data Upload")
         up = st.file_uploader(
@@ -293,6 +663,12 @@ def sidebar_getting_started():
             accept_multiple_files=False,
             key="gs_file",
         )
+        
+        # Normalize: some wrappers (or Streamlit internals) can return a list even when
+        # accept_multiple_files=False. Ensure we work with a single UploadedFile or None.
+        if isinstance(up, list):
+            up = up[0] if up else None
+        
         xml_xpath = st.text_input(
             "XML row path (optional XPath)",
             value=st.session_state.get("xml_xpath", ""),
@@ -308,37 +684,103 @@ def sidebar_getting_started():
         st.divider()
         st.markdown("**🔎 Column detection — Automatic**")
 
+        # # ---- Read uploaded file ---------------------------------------------
+        # _data, source_name = None, None
+        # if up is not None:
+        #     try:
+        #         if "cached_read" in globals() and callable(globals().get("cached_read")):
+        #             _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
+        #         else:
+        #             ext = Path(up.name).suffix.lower()
+        #             raw = up.getvalue()
+        #             if ext == ".csv":
+        #                 _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+        #             elif ext in {".xlsx", ".xls"}:
+        #                 _data = pd.read_excel(up)
+        #             elif ext == ".json":
+        #                 _data = pd.read_json(io.BytesIO(raw))
+        #             elif ext == ".parquet":
+        #                 _data = pd.read_parquet(io.BytesIO(raw))
+        #             elif ext == ".xml":
+        #                 try:
+        #                     _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
+        #                 except Exception:
+        #                     _data = pd.read_xml(io.BytesIO(raw))
+        #             else:
+        #                 st.warning(f"Unsupported extension: {ext}")
+        #                 _data = None
+        #         source_name = up.name
+        #         st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
+        #     except Exception as e:
+        #         st.error(f"Failed to read file: {e}")
+        #         _data, source_name = None, None
+
         # ---- Read uploaded file ---------------------------------------------
         _data, source_name = None, None
+        
+        # Normalize (defensive): sometimes a list sneaks through even with accept_multiple_files=False
+        if isinstance(up, list):
+            up = up[0] if up else None
+        
         if up is not None:
             try:
+                # Pull name + raw bytes safely
+                source_name = getattr(up, "name", None)
+                raw = (
+                    up.getvalue() if hasattr(up, "getvalue")
+                    else (up.read() if hasattr(up, "read") else None)
+                )
+                if raw is None:
+                    raise ValueError("Uploaded object missing readable content")
+        
+                # Cached fast path (if you defined cached_read(bytes, name, xml_xpath=...))
                 if "cached_read" in globals() and callable(globals().get("cached_read")):
-                    _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
+                    _data = cached_read(raw, source_name or "uploaded", xml_xpath=xml_xpath)
                 else:
-                    ext = Path(up.name).suffix.lower()
-                    raw = up.getvalue()
+                    ext = Path(source_name or "").suffix.lower()
+        
                     if ext == ".csv":
-                        _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+                        # Try utf-8, then fallback to latin-1
+                        try:
+                            _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+                        except Exception:
+                            _data = pd.read_csv(io.StringIO(raw.decode("latin-1", "ignore")))
+        
                     elif ext in {".xlsx", ".xls"}:
-                        _data = pd.read_excel(up)
+                        # Pandas can read from file-like buffer
+                        _data = pd.read_excel(io.BytesIO(raw))
+        
                     elif ext == ".json":
-                        _data = pd.read_json(io.BytesIO(raw))
+                        # Try standard JSON; if it fails, try lines
+                        try:
+                            _data = pd.read_json(io.BytesIO(raw))
+                        except ValueError:
+                            _data = pd.read_json(io.BytesIO(raw), lines=True)
+        
                     elif ext == ".parquet":
                         _data = pd.read_parquet(io.BytesIO(raw))
+        
                     elif ext == ".xml":
+                        # Prefer provided XPath; fallback to pandas' default
                         try:
-                            _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
+                            _data = pd.read_xml(io.BytesIO(raw), xpath=(xml_xpath or ".//row"))
                         except Exception:
                             _data = pd.read_xml(io.BytesIO(raw))
+        
                     else:
-                        st.warning(f"Unsupported extension: {ext}")
+                        st.warning(f"Unsupported extension: {ext or 'unknown'}")
                         _data = None
-                source_name = up.name
-                st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
+        
+                # Record shape if we loaded a DataFrame successfully
+                if _data is not None and hasattr(_data, "shape"):
+                    st.session_state["raw_rows"] = int(_data.shape[0])
+                    st.session_state["raw_cols"] = int(_data.shape[1])
+        
             except Exception as e:
                 st.error(f"Failed to read file: {e}")
                 _data, source_name = None, None
 
+        
         # ---- Helpers ---------------------------------------------------------
         def _infer_target(df: pd.DataFrame) -> str:
             if df is None or df.empty or not len(df.columns):
@@ -496,9 +938,9 @@ def sidebar_getting_started():
             st.subheader("ARIMA Family")
             sel_ARMA      = st.checkbox("ARMA",       value=st.session_state.get("sel_ARMA", True),    key="sel_ARMA")
             sel_ARIMA     = st.checkbox("ARIMA",      value=st.session_state.get("sel_ARIMA", True),   key="sel_ARIMA")
-            sel_ARIMAX    = st.checkbox("ARIMAX",     value=st.session_state.get("sel_ARIMAX", False), key="sel_ARIMAX")
-            sel_SARIMA    = st.checkbox("SARIMA",     value=st.session_state.get("sel_SARIMA", False), key="sel_SARIMA")
-            sel_SARIMAX   = st.checkbox("SARIMAX",    value=st.session_state.get("sel_SARIMAX", False),key="sel_SARIMAX")
+            sel_ARIMAX    = st.checkbox("ARIMAX",     value=st.session_state.get("sel_ARIMAX", True), key="sel_ARIMAX")
+            sel_SARIMA    = st.checkbox("SARIMA",     value=st.session_state.get("sel_SARIMA", True), key="sel_SARIMA")
+            sel_SARIMAX   = st.checkbox("SARIMAX",    value=st.session_state.get("sel_SARIMAX", True),key="sel_SARIMAX")
             sel_AutoARIMA = st.checkbox("Auto_ARIMA", value=st.session_state.get("sel_AutoARIMA", False), key="sel_AutoARIMA")
 
         with col_right:
@@ -2273,16 +2715,93 @@ def page_getting_started():
         st.info("Residual diagnostics not available (statsmodels missing or no fitted model).")
 
     st.divider()
-
-# Only render the app after the Start button is clicked
-if st.session_state.get("show_sidebar"):
-    # Show sidebar + the full Getting Started page
+    
+    # 1) capture snapshot locally
+    out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
+    
+    # 2) read secrets / env
+    az = st.secrets.get("azure", {})
+    account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
+    connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
+    container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
+    prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
+    
+    # 3) upload to Azure Blob
     try:
-        sidebar_getting_started()
+        sync_folder_to_blob(
+            local_folder=out_dir,
+            container=container,
+            prefix=prefix,
+            account_url=account_url,
+            connection_string=connection_string,
+            container_sas_url=container_sas_url,
+            delete_extraneous=False,  # True => strict mirror
+            verbose=False,
+        )
+        st.success(f"✅ Snapshot saved to the **Knowledge Base:** Azure container {container!r} (prefix {prefix!r}).")
+        # Optional: stop capturing further UI
+        # kb.unpatch()
+    except Exception as e:
+        st.error(f"Azure upload failed: {e}")
+    
+    # 4) friendly footer (Sydney local time)
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tz = ZoneInfo("Australia/Sydney")
+    except Exception:
+        from dateutil import tz as _tz  # fallback (pip install tzdata if needed)
+        tz = _tz.gettz("Australia/Sydney")
+    
+    local_time = datetime.now(tz)
+    formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+    st.info(f"🕒 Local Date & Time: **{formatted_time}**")
+#---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --- app render with BUTTONS (hide sidebar on AI Agent) ---
+if "view" not in st.session_state:
+    st.session_state["view"] = "Home"  # default landing on first load
+
+# Top nav buttons
+col1, col2 = st.columns([1, 1])
+with col1:
+    if st.button("🏠 Home", type="primary" if st.session_state["view"] == "Home" else "secondary"):
+        st.session_state["view"] = "Home"
+with col2:
+    if st.button("🤖 AI Agent", type="primary" if st.session_state["view"] == "AI Agent" else "secondary"):
+        st.session_state["view"] = "AI Agent"
+
+# st.divider()
+
+# Sidebar slot so we can conditionally render it
+sidebar_slot = st.sidebar.empty()
+
+# Hide/Show sidebar based on view
+if st.session_state["view"] == "AI Agent":
+    # Do NOT render sidebar contents and collapse the sidebar visually
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        div[data-testid="stSidebarCollapsedControl"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    # Render sidebar normally on Home
+    try:
+        with sidebar_slot:
+            sidebar_getting_started()
     except Exception as e:
         st.sidebar.error(f"Sidebar failed: {e}")
 
-    try:
+# Main view
+try:
+    if st.session_state["view"] == "Home":
         page_getting_started()
-    except Exception as e:
-        st.error(f"Error rendering Getting Started: {e}")
+    else:
+        # from forecast360_chat import run as run_ai_agent
+        run_ai_agent()
+except Exception as e:
+    st.error(f"Error rendering {st.session_state['view']}: {e}")
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------
