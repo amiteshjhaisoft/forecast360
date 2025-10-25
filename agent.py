@@ -1,5 +1,3 @@
-# Author: Amitesh Jha | iSOFT
-
 # Author: Amitesh Jha | iSoft
 # Forecast360 AI Agent — Strict RAG (Weaviate collection: Forecast360) → (optional) Claude
 # Weaviate v4 client compatible
@@ -36,14 +34,14 @@ def _sget(section: str, key: str, default: Any = None) -> Any:
         return default
 
 WEAVIATE_URL       = _sget("weaviate", "url", "")
-WEAVIATE_API_KEY = _sget("weaviate", "api_key", "")
-COLLECTION_NAME  = _sget("weaviate", "collection", "Forecast360").strip()  # REQUIRED
+WEAVIATE_API_KEY   = _sget("weaviate", "api_key", "")
+COLLECTION_NAME    = _sget("weaviate", "collection", "Forecast360").strip()  # REQUIRED
 
-EMB_MODEL_NAME   = _sget("rag", "embed_model", "sentence-transformers/all-MiniLM-L6-v2")
-TOP_K            = int(_sget("rag", "top_k", 8))
+EMB_MODEL_NAME     = _sget("rag", "embed_model", "sentence-transformers/all-MiniLM-L6-v2")
+TOP_K              = int(_sget("rag", "top_k", 8))
 
-ANTHROPIC_MODEL  = _sget("anthropic", "model", "claude-sonnet-4-5")
-ANTHROPIC_KEY    = _sget("anthropic", "api_key")
+ANTHROPIC_MODEL    = _sget("anthropic", "model", "claude-sonnet-4-5")
+ANTHROPIC_KEY      = _sget("anthropic", "api_key")
 if ANTHROPIC_KEY:
     os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_KEY
     os.environ.setdefault("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
@@ -160,8 +158,8 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
 
     • You can force the property names via Streamlit secrets:
         [weaviate]
-        text_property     = "content"      # REQUIRED if your schema doesn't use 'text'
-        source_property = "source_path"    # OPTIONAL
+        text_property   = "content"      # REQUIRED if your schema doesn't use 'text'
+        source_property = "source_path"  # OPTIONAL
 
     • If not forced, we fall back to schema introspection + heuristics.
     """
@@ -433,8 +431,11 @@ class Forecast360Agent:
                     "Please try again in a moment.")
 
 # ============================ Streamlit UI (same look & feel) ============================
-def run():
-    st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
+
+def _render_agent_core(set_config: bool = False):
+    # If embedding inside a parent app (tabs), we should NOT call set_page_config again.
+    if set_config:
+        st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
     
     st.markdown("""
     <style>
@@ -510,7 +511,7 @@ def run():
         # close the flex container
         st.markdown("</span></div>", unsafe_allow_html=True)
 
-    # --- Weaviate Connection and Agent Setup (MOVED INSIDE run()) ---
+    # --- Weaviate Connection and Agent Setup ---
     if "f360_client" not in st.session_state:
         with st.spinner("Connecting to the Forecast360 knowledge base…"):
             try:
@@ -541,7 +542,6 @@ def run():
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(pq)
         with st.chat_message("assistant", avatar=ASSISTANT_ICON):
-            # keep UI unchanged; optionally rotate a richer loading phrase
             loading_msg = random.choice(PROMPTS["loading"])
             with st.spinner(loading_msg):
                 reply = agent.respond(pq)
@@ -563,6 +563,14 @@ def run():
         st.session_state["messages"].append({"role":"assistant","content":reply})
         st.rerun()
 
-# allow “from forecast360_chat import run” in a parent app
+# Public API for embedding inside your tabbed app
+def render_agent():
+    _render_agent_core(set_config=False)
+
+# Standalone runner (useful for `streamlit run agent.py`)
+def run():
+    _render_agent_core(set_config=True)
+
+# allow “python agent.py”
 if __name__ == "__main__":
     run()
