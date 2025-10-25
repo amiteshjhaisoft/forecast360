@@ -4,7 +4,7 @@ import streamlit.components.v1 as components
 
 from home import page_home
 from gs import render as render_getting_started, render_sidebar as render_gs_sidebar
-from agent import render as render_agent
+from agent import render_agent
 
 st.set_page_config(
     page_title="Three-Tab App",
