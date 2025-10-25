@@ -435,7 +435,12 @@ class Forecast360Agent:
 def _render_agent_core(set_config: bool = False):
     # If embedding inside a parent app (tabs), we should NOT call set_page_config again.
     if set_config:
-        st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
+        st.set_page_config(
+            page_title=PAGE_TITLE,   # Text shown in browser tab
+            page_icon=PAGE_ICON,     # Icon shown in tab (can be emoji or image path)
+            layout="centered"        # Page layout style: "centered" or "wide"
+        )
+
     
     st.markdown("""
     <style>
