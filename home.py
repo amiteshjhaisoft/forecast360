@@ -111,15 +111,14 @@ def page_home():
 
 
 def main():
-    icon_path = Path("assets/forecast360.png")
-    page_icon = Image.open(icon_path) if icon_path.is_file() else "📈"
+    # icon_path = Path("assets/forecast360.png")
+    # page_icon = Image.open(icon_path) if icon_path.is_file() else "📈"
 
-    st.set_page_config(
-        page_title="Forecast360",
-        page_icon=page_icon,
-        layout="wide",
-    )
+    # st.set_page_config(
+    #     page_title="Forecast360",
+    #     page_icon=page_icon,
+    #     layout="wide",
+    # )
     page_home()  # make sure page_home() is imported/defined
-
 if __name__ == "__main__":
     main()
