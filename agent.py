@@ -1,12 +1,11 @@
 # Author: Amitesh Jha | iSoft
-# Forecast360 AI Agent — Strict RAG (Weaviate collection: Forecast360) → (optional) Claude
+# Forecast360 AI Agent — Strict RAG (Weaviate collection only)
 # Weaviate v4 client compatible
 
 from __future__ import annotations
-import os, re, json, itertools, random
+import os, re, itertools, random
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import streamlit as st
 
 # --- Embeddings (for query vectors) ---
@@ -25,108 +24,93 @@ from weaviate.classes.init import Auth, AdditionalConfig, Timeout
 
 from azure_sync_weaviate import sync_from_azure
 
+
 # ============================ Configuration ============================
 
-def _sget(section: str, key: str, default: Any = None) -> Any:
+def _sget(section: str, key: str) -> str:
+    """Return a trimmed secret or empty string if missing (we'll fail fast below)."""
     try:
-        return st.secrets[section].get(key, default)  # type: ignore
+        return str(st.secrets[section][key]).strip()  # type: ignore
     except Exception:
-        return default
+        return ""
 
-WEAVIATE_URL       = _sget("weaviate", "url", "")
-WEAVIATE_API_KEY   = _sget("weaviate", "api_key", "")
-COLLECTION_NAME    = _sget("weaviate", "collection", "Forecast360").strip()  # REQUIRED
+WEAVIATE_URL     = _sget("weaviate", "url")
+WEAVIATE_API_KEY = _sget("weaviate", "api_key")
+COLLECTION_NAME  = _sget("weaviate", "collection")  # REQUIRED (no fallback)
 
-EMB_MODEL_NAME     = _sget("rag", "embed_model", "sentence-transformers/all-MiniLM-L6-v2")
-TOP_K              = int(_sget("rag", "top_k", 8))
+EMB_MODEL_NAME   = _sget("rag", "embed_model") or "sentence-transformers/all-MiniLM-L6-v2"
+try:
+    TOP_K        = int(_sget("rag", "top_k") or 8)
+except Exception:
+    TOP_K        = 8
 
-ANTHROPIC_MODEL    = _sget("anthropic", "model", "claude-sonnet-4-5")
-ANTHROPIC_KEY      = _sget("anthropic", "api_key")
+ANTHROPIC_MODEL  = _sget("anthropic", "model") or "claude-3-5-sonnet-20240620"
+ANTHROPIC_KEY    = _sget("anthropic", "api_key")
 if ANTHROPIC_KEY:
     os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_KEY
     os.environ.setdefault("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
 
-ASSISTANT_ICON = _sget("ui", "assistant_icon", "assets/forecast360.png")
-USER_ICON      = _sget("ui", "user_icon", "assets/avatar.png")
-PAGE_ICON      = _sget("ui", "page_icon", "assets/forecast360.png")
-PAGE_TITLE     = _sget("ui", "page_title", "Forecast360 AI Agent")
+ASSISTANT_ICON = _sget("ui", "assistant_icon") or "assets/forecast360.png"
+USER_ICON      = _sget("ui", "user_icon") or "assets/avatar.png"
+PAGE_ICON      = _sget("ui", "page_icon") or "assets/forecast360.png"
+PAGE_TITLE     = _sget("ui", "page_title") or "Forecast360 AI Agent"
 
-# ============================ Prompts (Domain-Focused) ============================
+# Fail fast if critical secrets are missing
+if not WEAVIATE_URL:
+    raise RuntimeError("Missing [weaviate].url in Streamlit secrets.")
+if not COLLECTION_NAME:
+    raise RuntimeError("Missing [weaviate].collection in Streamlit secrets.")
+
+
+# ============================ Prompts (Weaviate-only, synonym-aware) ============================
 
 PROMPTS = {
     "system": (
         "I am the Forecast360 AI Agent — a professional decision-intelligence and time-series forecasting assistant "
         "developed by iSoft ANZ Pvt Ltd.\n\n"
         "Purpose:\n"
-        "I help users understand, operate, and optimize Forecast360 for data ingestion, feature engineering, model "
-        "training, validation, forecasting, and visualization of time-series data.\n\n"
+        "I answer strictly from the Forecast360 Weaviate knowledge base (documents, captions/alt text, OCR from images, "
+        "ASR transcripts from audio/video, slide notes, file names, metadata). I do not use external sources or UI state.\n\n"
         "Retrieval & Matching:\n"
-        "- Treat user terms broadly: match by exact keywords, synonyms, abbreviations, acronyms, plural/singular, "
-        "morphological variants (e.g., 'forecast'/'forecasting'), and common regional spellings.\n"
-        "- Align generic terms to Forecast360 domain vocabulary (e.g., 'error' → RMSE/MAE/MAPE; 'model' → ARIMA, "
-        "SARIMA, Prophet, TBATS, XGBoost, LightGBM, TFT; 'pipeline' → ingestion → prep → training → validation → "
-        "forecast → reporting).\n"
-        "- Use multimodal signals stored in the Weaviate collection: document text, captions/alt text, OCR from images, "
-        "ASR transcripts from audio/video, slide notes, file names, and metadata. Treat these as valid evidence.\n\n"
+        "- Match by exact keywords and by synonyms, acronyms, abbreviations, plural/singular, and morphological variants.\n"
+        "- Map generic terms to Forecast360 vocabulary where possible (e.g., error → RMSE/MAE/MAPE; model → ARIMA/SARIMA/"
+        "Prophet/TBATS/XGBoost/LightGBM/TFT; pipeline → ingestion→prep→training→validation→forecast→reporting).\n\n"
         "Persona & Style:\n"
-        "- Speak as “I/me/my”. Be analytical, precise, supportive, and concise.\n"
-        "- Prefer structured bullets and short paragraphs. Use units and shapes when reporting numbers (e.g., rows×cols).\n"
-        "- If sources conflict, say so and present the most consistent view across top results.\n"
-        "- Never invent facts. If information is missing, respond exactly: “Insufficient Context.”\n"
-        "- Avoid external URLs or speculation.\n\n"
-        "Scope:\n"
-        "- Forecast360 modules, architecture, connectors, pipelines, dashboards.\n"
-        "- Algorithms (ARIMA/SARIMA/Prophet/TBATS/XGBoost/LightGBM/TFT, etc.).\n"
-        "- Metrics (RMSE, MAE, MASE, MAPE, sMAPE, R², etc.).\n"
-        "- Azure integrations (Blob, Databricks, Synapse, ADF), versioning, CV/leaderboards.\n"
-        "- App state: uploaded data, chosen columns, resampling, transforms, forecasts."
+        "- I speak as “I/me/my”. I am analytical, precise, supportive, and concise.\n"
+        "- I prefer structured bullets and short paragraphs and never invent facts.\n"
+        "- If information is missing, I respond exactly: “Insufficient Context.”\n"
+        "- I avoid external URLs or speculative content."
     ),
-
     "retrieval_template": (
-        "Answer strictly using the provided Forecast360 context.\n\n"
+        "Answer strictly using the Forecast360 Weaviate knowledge base content below.\n\n"
         "User Question:\n{question}\n\n"
-        "Knowledge Base Context (Weaviate — text, captions, OCR/ASR, metadata):\n{kb}\n\n"
-        "Local Session Context (current app state):\n{local}\n\n"
+        "Knowledge Base Context (Weaviate — text/captions/OCR/ASR/metadata):\n{kb}\n\n"
         "Instructions:\n"
-        "- Map question terms to their synonyms/abbreviations/acronyms and Forecast360 equivalents before answering.\n"
-        "- Use only facts supported by the context above. If context is insufficient, reply: “Insufficient Context.”\n"
-        "- Prefer concise, structured answers (bullets/tables). Include units, shapes, and key parameters where relevant.\n"
-        "- If the KB and local session disagree, note the discrepancy and explain which applies to the user now.\n"
-        "- When you mention an artifact (model, metric, file, pipeline step), reference it exactly as named in context."
+        "- Map question terms to synonyms/acronyms/variants and align to Forecast360 terminology before answering.\n"
+        "- Use only facts supported by the KB context. If insufficient, reply only: “Insufficient Context.”\n"
+        "- Be concise and structured. When naming artifacts (models/metrics/files/pipeline steps), use the exact names from context."
     ),
-
     "query_rewrite": (
         "Rewrite the user’s question into a single precise Forecast360/time-series retrieval query optimized for both "
         "semantic and lexical search. Include the core concept plus common synonyms/abbreviations/acronyms and variants "
-        "in a compact form (you may use OR or commas). Do not add explanations — return only the rewritten query.\n\n"
-        "Examples:\n"
-        "- 'How does it work?' → 'Forecast360 end-to-end pipeline OR workflow OR process (ingestion, feature engineering, "
-        "training, validation, forecasting, reporting)'\n"
-        "- 'Which models do you use?' → 'Forecast360 forecasting algorithms OR models: ARIMA OR SARIMA OR Prophet OR "
-        "TBATS OR XGBoost OR LightGBM OR TFT'\n"
-        "- 'How accurate are forecasts?' → 'Forecast360 accuracy metrics: RMSE OR MAE OR MAPE OR sMAPE OR MASE OR R^2'"
+        "in a compact form (use OR or commas). Return only the rewritten query."
     ),
-
     "loading": [
         "Analyzing your query and related synonyms…",
         "Searching Forecast360 knowledge across documents, images, and transcripts…",
         "Ranking results and aligning terminology to Forecast360…",
         "Synthesizing a grounded answer from the retrieved context…",
-        "Verifying metrics and model details from the knowledge base…",
+        "Verifying details from the knowledge base…",
     ],
 }
 
-
-# Backward-compatible minimal prompts (kept for fallback)
 COMPANY_RULES = PROMPTS["system"]
 SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
+
 
 # ============================ Helpers ============================
 
 def _connect_weaviate():
-    if not WEAVIATE_URL:
-        raise RuntimeError("Set [weaviate].url in secrets.")
-
     auth = Auth.api_key(WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
 
     client = weaviate.connect_to_weaviate_cloud(
@@ -137,14 +121,15 @@ def _connect_weaviate():
         ),
     )
 
-    # quick check: collection must exist (use() is the idiomatic v4 call)
+    # Ensure the collection exists and is queryable
     try:
-        _ = client.collections.use(COLLECTION_NAME)
+        coll = client.collections.use(COLLECTION_NAME)  # raises if missing
+        # Light health check: tiny BM25 (succeeds even if empty)
+        _ = coll.query.bm25(query="__healthcheck__", limit=1)
     except Exception as e:
-        raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or client unreachable: {e}")
+        raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or not queryable: {e}")
 
     return client
-
 
 @st.cache_resource(show_spinner=False)
 def _load_embed_model(name: str) -> SentenceTransformer:
@@ -161,26 +146,15 @@ def _load_reranker():
 
 RERANKER = _load_reranker()
 
-# ============= Introspective schema helpers (v4 Collections) =============
+
+# ============= Schema helpers (v4 Collections) =============
 
 def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
-    """
-    Pick the main text field and an optional source/url-like field.
-
-    • You can force the property names via Streamlit secrets:
-        [weaviate]
-        text_property   = "content"      # REQUIRED if your schema doesn't use 'text'
-        source_property = "source_path"  # OPTIONAL
-
-    • If not forced, we fall back to schema introspection + heuristics.
-    """
-    # --- secrets-based override (preferred if set) ---
-    forced_text = _sget("weaviate", "text_property", None)
-    forced_src  = _sget("weaviate", "source_property", None)
+    forced_text = _sget("weaviate", "text_property")
+    forced_src  = _sget("weaviate", "source_property")
     if forced_text:
-        return forced_text, forced_src
+        return forced_text, (forced_src or None)
 
-    # --- heuristic fallback via schema inspection ---
     text_field: Optional[str] = None
     source_field: Optional[str] = None
     try:
@@ -189,7 +163,7 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
         props = getattr(cfg, "properties", []) or []
         names = [getattr(p, "name", "") for p in props]
 
-        # likely content fields
+        # likely text properties
         for cand in ["text", "content", "body", "chunk", "passage", "document", "value"]:
             if cand in names:
                 text_field = cand
@@ -203,7 +177,7 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
                     if text_field:
                         break
 
-        # likely source/url fields
+        # likely source/url properties
         for cand in ["source", "url", "page", "path", "file", "document", "uri", "source_path"]:
             if cand in names:
                 source_field = cand
@@ -212,6 +186,7 @@ def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Opt
         pass
 
     return (text_field or "text", source_field)
+
 
 # ============================ Retrieval (v4) ============================
 
@@ -231,7 +206,7 @@ def _best_extract_sentences(question: str, texts: List[str], max_pick: int = 6) 
     # clean + dedupe
     seen, out = set(), []
     for s in picked:
-        ss = re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", s)).strip()
+        ss = re.sub(r"\s+", " ", s).strip()
         k = ss.lower()
         if len(ss) >= 24 and k not in seen:
             seen.add(k); out.append(ss)
@@ -347,9 +322,11 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
             seen.add(key); uniq.append(c)
     return _apply_reranker(query, uniq, k)
 
+
 # ============================ LLM Synthesis & Query Rewrite ============================
 
-def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]:
+def _anthropic_answer(question: str, kb_blocks: List[str]) -> Optional[str]:
+    """Synthesize an answer strictly from KB blocks. If model absent/unavailable, return None."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key:
         return None
@@ -357,9 +334,10 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
         import anthropic as _anthropic
     except Exception:
         return None
+
     prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
         question=question,
-        ctx="\n".join(f"- {c}" for c in context_blocks)
+        kb="\n".join(f"- {c}" for c in kb_blocks)
     )
     try:
         client = _anthropic.Anthropic(api_key=key)
@@ -380,7 +358,7 @@ def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]
         return None
 
 def _rewrite_query(orig_question: str) -> str:
-    """Use Claude to rewrite the query into a precise Forecast360/TS context; fallback to original."""
+    """Use Claude to rewrite the query into a precise Forecast360/TS retrieval query; fallback to original."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key or not orig_question.strip():
         return orig_question
@@ -399,6 +377,7 @@ def _rewrite_query(orig_question: str) -> str:
     except Exception:
         return orig_question
 
+
 # ============================ Agent ============================
 
 class Forecast360Agent:
@@ -412,47 +391,43 @@ class Forecast360Agent:
         # 1) Query rewrite (domain-focused)
         q_precise = _rewrite_query(user_q)
 
-        # 2) Retrieve
+        # 2) Retrieve strictly from Weaviate
         hits = retrieve(self.client, self.class_name, q_precise, TOP_K)
         if not hits:
-            return ("We couldn’t find that detail in the Forecast360 knowledge base. "
-                    "Please rephrase or ask about a different topic.")
+            return "Insufficient Context."
         texts = [h["text"] for h in hits]
+        # Pick the most relevant sentences for grounding (keeps synthesis concise)
         excerpts = _best_extract_sentences(q_precise, texts, max_pick=6) or texts[:6]
 
-        # 3) LLM Synthesis (strictly grounded)
+        # 3) LLM Synthesis (strictly grounded to KB only)
         llm_ans = _anthropic_answer(q_precise, excerpts)
         if llm_ans:
             return llm_ans
 
-        # 4) Fallback extractive summary
-        parts = ["Here’s what we can confirm from our knowledge base:"]
+        # 4) Fallback extractive summary (still KB-only)
+        parts = ["Here’s what I can confirm from the knowledge base:"]
         parts += [f"- {ex}" for ex in excerpts]
         return "\n".join(parts)
 
     def respond(self, user_q: str) -> str:
         ql = user_q.strip().lower()
         if re.fullmatch(r"(hi|hello|hey|greetings|good (morning|afternoon|evening))[\W_]*", ql or ""):
-            return ("Hello! I am Forecast360 AI Agent. Ask me about forecasting models, pipelines, dashboards, "
-                    "accuracy metrics, or Azure integrations — we’ll answer using our knowledge base.")
+            return ("Hello! I’m the Forecast360 AI Agent. Ask me about models, pipelines, metrics, forecasts, "
+                    "or KB content. I answer strictly from the Forecast360 knowledge base.")
         try:
             return self._answer(user_q)
         except Exception:
             return ("Sorry, something went wrong while processing your request. "
                     "Please try again in a moment.")
 
-# ============================ Streamlit UI (same look & feel) ============================
+
+# ============================ Streamlit UI ============================
 
 def _render_agent_core(set_config: bool = False):
-    # If embedding inside a parent app (tabs), we should NOT call set_page_config again.
+    # If embedding inside a parent app (tabs), do not re-set page config.
     if set_config:
-        st.set_page_config(
-            page_title=PAGE_TITLE,   # Text shown in browser tab
-            page_icon=PAGE_ICON,     # Icon shown in tab (can be emoji or image path)
-            layout="centered"        # Page layout style: "centered" or "wide"
-        )
+        st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
 
-    
     st.markdown("""
     <style>
     .stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
@@ -464,43 +439,30 @@ def _render_agent_core(set_config: bool = False):
     .bottom-actions { margin-top: 6px; }
     </style>
     """, unsafe_allow_html=True)
-    
+
     # Header
     c1, c2 = st.columns([1, 8], vertical_alignment="center")
     with c1: st.image(ASSISTANT_ICON, width=80)
     with c2:
         st.markdown("### Forecast360 AI Agent")
+        st.caption(f"Knowledge Base Collection: **{COLLECTION_NAME}**")
         st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
-    
+
     # --- KB Refresh (Azure Blob -> Weaviate) ---
     with st.container():
         st.markdown("""
         <style>
-        .kb-row {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 6px;
-        }
-        .kb-caption {
-            font-size: 0.9rem;
-            color: var(--text-color-secondary,#6b6f76);
-            white-space: nowrap;
-        }
+        .kb-row { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .kb-caption { font-size: 0.9rem; color: var(--text-color-secondary,#6b6f76); white-space: nowrap; }
         .kb-refresh-btn button {
-            width: 26px; height: 26px;
-            min-width: 26px; min-height: 26px;
-            padding: 0; border-radius: 6px;
-            font-size: 14px; line-height: 1;
+            width: 26px; height: 26px; min-width: 26px; min-height: 26px;
+            padding: 0; border-radius: 6px; font-size: 14px; line-height: 1;
         }
         </style>
         <div class="kb-row">
-          <span class="kb-caption">
-            Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
-          </span>
+          <span class="kb-caption">Weaviate ← Azure Blob (refresh to re-sync latest files)</span>
           <span class="kb-refresh-btn">""", unsafe_allow_html=True)
-    
-        # The button itself
+
         if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
             with st.spinner("Refreshing knowledge base…"):
                 try:
@@ -523,8 +485,7 @@ def _render_agent_core(set_config: bool = False):
                     st.toast("Knowledge base refreshed.")
                 except Exception as e:
                     st.error(f"KB refresh failed: {e}")
-    
-        # close the flex container
+
         st.markdown("</span></div>", unsafe_allow_html=True)
 
     # --- Weaviate Connection and Agent Setup ---
@@ -535,26 +496,28 @@ def _render_agent_core(set_config: bool = False):
             except Exception as e:
                 st.error(f"⚠️ Weaviate configuration error: {e}")
                 st.stop()
-    
+
     agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
-    
+
     # Initial assistant message (only once)
     if not st.session_state["messages"]:
         st.session_state["messages"].append({
-            "role":"assistant",
-            "content":"Hello! I’m your Forecast360 AI Agent. How can I help today?"
+            "role": "assistant",
+            "content": "Hello! I’m your Forecast360 AI Agent. I answer strictly from the Weaviate knowledge base. How can I help?"
         })
-    
+
     # Render chat history
     for m in st.session_state["messages"]:
-        avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
+        avatar = ASSISTANT_ICON if m["role"] == "assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
         with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
-    
-    # Process queued query (if any)
+
+    # If the parent app wants to queue a question (e.g., from another widget)
     if "pending_query" in st.session_state:
         pq = st.session_state.pop("pending_query")
-        st.session_state["messages"].append({"role":"user","content":pq})
+        st.session_state["_suspend_gs"] = True  # keep GS tab quiet this run
+
+        st.session_state["messages"].append({"role": "user", "content": pq})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(pq)
         with st.chat_message("assistant", avatar=ASSISTANT_ICON):
@@ -562,13 +525,16 @@ def _render_agent_core(set_config: bool = False):
             with st.spinner(loading_msg):
                 reply = agent.respond(pq)
             st.markdown(reply)
-        st.session_state["messages"].append({"role":"assistant","content":reply})
-        st.rerun()
-    
-    # Chat input
-    user_q = st.chat_input("Ask me...", key="chat_box")
+        st.session_state["messages"].append({"role": "assistant", "content": reply})
+
+        st.session_state["_suspend_gs"] = False  # clear suspension
+
+    # Chat input — avoid extra reruns; suspend GS during this turn
+    user_q = st.chat_input("Ask me about Forecast360…", key="chat_box")
     if user_q:
-        st.session_state["messages"].append({"role":"user","content":user_q})
+        st.session_state["_suspend_gs"] = True
+
+        st.session_state["messages"].append({"role": "user", "content": user_q})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(user_q)
         with st.chat_message("assistant", avatar=ASSISTANT_ICON):
@@ -576,8 +542,10 @@ def _render_agent_core(set_config: bool = False):
             with st.spinner(loading_msg):
                 reply = agent.respond(user_q)
             st.markdown(reply)
-        st.session_state["messages"].append({"role":"assistant","content":reply})
-        st.rerun()
+        st.session_state["messages"].append({"role": "assistant", "content": reply})
+
+        st.session_state["_suspend_gs"] = False  # clear suspension
+
 
 # Public API for embedding inside your tabbed app
 def render_agent():
@@ -587,6 +555,5 @@ def render_agent():
 def run():
     _render_agent_core(set_config=True)
 
-# allow “python agent.py”
 if __name__ == "__main__":
     run()
