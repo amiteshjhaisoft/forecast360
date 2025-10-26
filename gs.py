@@ -791,6 +791,15 @@ def page_getting_started():
       - Residual diagnostics: ACF, PACF, residual stats & plot
     Visuals use a single professional theme for consistency.
     """
+    # If the Agent tab is handling a chat turn, skip heavy GS rendering this run
+    if st.session_state.get("_suspend_gs", False):
+        return
+
+    # If you gate GS by a CTA, honor that here
+    if not st.session_state.get("show_sidebar", False):
+        st.info("Click **Start** on the Getting Started tab to begin.")
+        return
+        
     import json, io, math, warnings
     from pathlib import Path
     import numpy as np
