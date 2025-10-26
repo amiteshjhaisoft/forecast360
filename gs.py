@@ -1000,6 +1000,57 @@ def page_getting_started():
         denom = np.clip((np.abs(a) + np.abs(b)) / 2.0, 1e-9, None)
         return float(np.mean(np.abs(a - b) / denom) * 100.0) if len(a) else float("nan")
 
+    # --- Helpers for STL guardrails ---
+    def _resolve_period_m(df: pd.DataFrame, date_col: str, user_m: str | int | None, freq_opt: str) -> int | None:
+        """Decide the seasonal period m (int) from user input or heuristics."""
+        # If user provided an explicit integer
+        try:
+            if user_m is not None and str(user_m).strip().lower() != "auto":
+                m_val = int(float(str(user_m).strip()))
+                return m_val if m_val >= 2 else None
+        except Exception:
+            pass
+    
+        # Heuristics when 'auto'
+        # Map common resample choices to typical seasonality
+        if freq_opt == "D":   # daily → weekly seasonality by default
+            return 7
+        if freq_opt == "W":   # weekly → yearly-ish seasonality not reliable; default 52 (requires long history)
+            return 52
+        if freq_opt == "M":   # monthly → annual seasonality
+            return 12
+        if freq_opt == "Q":   # quarterly → annual seasonality (4)
+            return 4
+    
+        # If raw, try to infer from datetime frequency
+        try:
+            s = pd.to_datetime(df[date_col], errors="coerce").dropna().sort_values()
+            inferred = pd.infer_freq(s)
+            if inferred:
+                if inferred.startswith("D"):  # daily
+                    return 7
+                if inferred.startswith("W"):  # weekly
+                    return 52
+                if inferred.startswith("M"):  # month end
+                    return 12
+                if inferred.startswith("Q"):  # quarter end
+                    return 4
+        except Exception:
+            pass
+        return None  # unknown
+    
+    def _prep_series_for_stl(df: pd.DataFrame, date_col: str, target_col: str, freq_opt: str) -> pd.Series:
+        """Return a numeric Series indexed by datetime, optionally resampled."""
+        ts = df[[date_col, target_col]].copy()
+        ts[date_col] = pd.to_datetime(ts[date_col], errors="coerce")
+        ts = ts.dropna(subset=[date_col, target_col]).sort_values(date_col).set_index(date_col)
+        y = pd.to_numeric(ts[target_col], errors="coerce").dropna()
+        if freq_opt and freq_opt in {"D", "W", "M", "Q"}:
+            # sum aggregation is common for volumes; change to "mean" if appropriate
+            y = y.resample(freq_opt).sum().dropna()
+        return y
+
+
     # ---------------------- Read Uploaded Data from State ----------------------
     st.markdown("---")
     df          = st.session_state.get("uploaded_df")
@@ -1500,131 +1551,307 @@ def page_getting_started():
         # Close EDA section wrapper
         st.markdown("</div>", unsafe_allow_html=True)
 
-
     # ========================= Seasonality & Decomposition =========================
     st.divider()
-    # st.markdown("## 🌊 Seasonality & Decomposition")
-    st.markdown('<div class="block-card"><h4>🌊 Seasonality & Decomposition</h4>', unsafe_allow_html=True,)
+    st.markdown('<div class="block-card"><h4>🌊 Seasonality & Decomposition</h4>', unsafe_allow_html=True)
     L2, R2 = st.columns([0.5, 0.5], gap="large")
-
-    if HAVE_STATSM and y.dropna().shape[0] >= max(2*m, 20):
-        stl = STL(y.dropna(), period=max(m,1)).fit()
-
-        with L2:
-            # st.markdown("#### Component summaries")
-            st.markdown('<div class="block-card"><h4>Component Summaries</h4>', unsafe_allow_html=True,)
-            comp_df = pd.DataFrame(
-                {"mean":[stl.observed.mean(), stl.trend.mean(), stl.seasonal.mean(), stl.resid.mean()],
-                 "std": [stl.observed.std(),  stl.trend.std(),  stl.seasonal.std(),  stl.resid.std()]},
-                index=["Observed","Trend","Seasonal","Resid"]
-            ).reset_index(names="component")
-            # st.markdown('<div class="block-card">', unsafe_allow_html=True)
-            _st_df(comp_df, use_container_width=True, hide_index=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # st.markdown("#### Seasonality diagnostics")
-            st.markdown('<div class="block-card"><h4>Seasonality diagnostics</h4>', unsafe_allow_html=True,)
-            var = np.nanvar
-            tr, se, re = stl.trend.dropna().values, stl.seasonal.dropna().values, stl.resid.dropna().values
-            n = min(len(tr), len(se), len(re)); tr, se, re = tr[-n:], se[-n:], re[-n:]
-            Ft = max(0.0, 1 - var(re)/max(var(tr + re), 1e-12))
-            Fs = max(0.0, 1 - var(re)/max(var(se + re), 1e-12))
-            vs, vt, vr = var(se), var(tr), var(re); denom = (vs + vt + vr) or np.nan
-            p = lambda x: "–" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:,.1f}%"
-            diag_df = pd.DataFrame({
-                "metric": ["Seasonal strength (Fs)", "Trend strength (Ft)",
-                           "Variance share · Seasonal", "Variance share · Trend", "Variance share · Residual"],
-                "value":  [p(Fs), p(Ft), p(vs/denom if denom else np.nan),
-                           p(vt/denom if denom else np.nan), p(vr/denom if denom else np.nan)]
-            })
-            # st.markdown('<div class="block-card">', unsafe_allow_html=True)
-            _st_df(diag_df, use_container_width=True, hide_index=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # st.markdown("#### Autocorrelation & tests")
-            # st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
-            y_clean = pd.Series(y).dropna().values
-            nlags = int(min(len(y_clean)//2, max(60, 2*m)))
-            ac = _acf(y_clean, nlags=nlags, fft=True)
-            peaks = [(lag, val) for lag, val in enumerate(ac) if lag > 0]
-            peaks.sort(key=lambda t: t[1], reverse=True)
-            top_peaks = peaks[:3]
-            colA, colB = st.columns([0.55, 0.45])
-
-            with colA:
-                # Build the small table of top ACF lags safely
-                if top_peaks:
-                    df_top = pd.DataFrame({
-                        "top lag": [p[0] for p in top_peaks],
-                        "ACF":     [round(p[1], 3) for p in top_peaks],
-                    })
-                else:
-                    df_top = pd.DataFrame({"top lag": ["–"], "ACF": ["–"]})
-
-                st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
-                _st_df(df_top, use_container_width=True, hide_index=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            with colB:
-                try:
-                    adf_p = adfuller(y_clean, autolag="AIC")[1]
-                except Exception:
-                    adf_p = np.nan
-
-                lags = [m] if m else [10]
-                try:
-                    lb_p = float(_ljung(y_clean, lags=lags, return_df=True)["lb_pvalue"].iloc[0])
-                except Exception:
-                    lb_p = np.nan
-
-                st.markdown('<div class="block-card"><h4>Tests</h4>', unsafe_allow_html=True,)
-                _st_df(
-                    pd.DataFrame(
-                        [
-                            ("ADF stationarity p", round(adf_p, 4) if not np.isnan(adf_p) else "—"),
-                            (f"Ljung–Box p @ m={m or 10}", round(lb_p, 4) if not np.isnan(lb_p) else "—"),
-                        ],
-                        columns=["test", "p-value"],
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                st.markdown("</div>", unsafe_allow_html=True)
-
-
-        with R2:
-            # Seasonal–Trend decomposition
-            st.markdown('<div class="block-card"><h4>Seasonal–Trend Decomposition</h4>', unsafe_allow_html=True)
-            # --- Plot STL components (Observed, Trend, Seasonal, Resid) -------------------
-            fig, axes = plt.subplots(4, 1, figsize=(8.8, 5.8), sharex=True)
-            cols = [0.20, 0.40, 0.60, 0.80]
-            for ax, s, t, c in zip(
-                axes,
-                [stl.observed, stl.trend, stl.seasonal, stl.resid],
-                ["Observed", "Trend", "Seasonal", "Resid"],
-                cols,
-            ):
-                ax.plot(s, lw=1.8, color=plt.get_cmap("viridis")(c))
-                ax.set_title(t)
-                ax.grid(alpha=0.5)
-            fig.tight_layout()
-
-            st.pyplot(fig, clear_figure=True)
-            st.markdown("</div>", unsafe_allow_html=True)  # close block-card
-
-            # --- ACF bars -----------------------------------------------------------------
-            st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
-            max_show = min(nlags, 48)
-            figc, axc = plt.subplots(figsize=(8.8, 2.6))
-            axc.bar(range(1, max_show + 1), ac[1 : max_show + 1], edgecolor="white", linewidth=0.4)
-            axc.set_title(f"ACF (first {max_show} lags)")
-            st.pyplot(figc, clear_figure=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-
+    
+    # --- Resolve inputs/state ---
+    date_col   = st.session_state.get("date_col")
+    target_col = st.session_state.get("target_col")
+    freq_opt   = st.session_state.get("resample_freq", "raw")
+    user_m     = st.session_state.get("seasonal_m", "auto")
+    
+    # --- Build series y (resampled if selected) ---
+    def _prep_y(df: pd.DataFrame, date_col: str, target_col: str, freq_opt: str) -> pd.Series:
+        ts = df[[date_col, target_col]].copy()
+        ts[date_col] = pd.to_datetime(ts[date_col], errors="coerce")
+        ts = ts.dropna(subset=[date_col, target_col]).sort_values(date_col).set_index(date_col)
+        yv = pd.to_numeric(ts[target_col], errors="coerce").dropna()
+        if freq_opt in {"D", "W", "M", "Q"}:
+            yv = yv.resample(freq_opt).sum().dropna()
+        return yv
+    
+    # --- Resolve seasonal period m ---
+    def _resolve_m(df: pd.DataFrame, date_col: str, user_m, freq_opt: str) -> Optional[int]:
+        # explicit value
+        try:
+            if user_m is not None and str(user_m).strip().lower() != "auto":
+                mv = int(float(str(user_m).strip()))
+                return mv if mv >= 2 else None
+        except Exception:
+            pass
+        # heuristic by resample freq
+        return {"D": 7, "W": 52, "M": 12, "Q": 4}.get(freq_opt)  # None if "raw" or unknown
+    
+    # Ensure we have df in scope; use your working frame (dfd if present)
+    _df_for_stl = locals().get("dfd", None) or st.session_state.get("uploaded_df")
+    
+    can_run = (
+        HAVE_STATSM
+        and isinstance(_df_for_stl, pd.DataFrame)
+        and _df_for_stl is not None
+        and date_col in (list(_df_for_stl.columns) if isinstance(_df_for_stl, pd.DataFrame) else [])
+        and target_col in (list(_df_for_stl.columns) if isinstance(_df_for_stl, pd.DataFrame) else [])
+    )
+    
+    if not can_run:
+        st.info("Not enough inputs or statsmodels unavailable to run decomposition.")
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
-        st.info("Not enough points or library unavailable for STL decomposition — need at least ~2 seasonal cycles.")
+        y = _prep_y(_df_for_stl, date_col, target_col, freq_opt)
+        m = _resolve_m(_df_for_stl, date_col, user_m, freq_opt) or 0
+        min_needed = max(2 * max(m, 1), 20)  # need ~2 seasonal cycles; also a floor of 20 points
+    
+        if len(y.dropna()) < min_needed:
+            st.info(f"Not enough points for STL — need ≥ ~2 seasonal cycles "
+                    f"(required ≥ {max(2*m, 20)} points; have {len(y.dropna())}).")
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            # --- STL ---
+            try:
+                from statsmodels.tsa.seasonal import STL
+                stl = STL(y.dropna(), period=max(m, 1), robust=True).fit()
+            except Exception as e:
+                st.warning(f"STL decomposition failed: {e}")
+                st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                with L2:
+                    # Component summaries
+                    st.markdown('<div class="block-card"><h4>Component Summaries</h4>', unsafe_allow_html=True)
+                    comp_df = pd.DataFrame(
+                        {
+                            "mean": [stl.observed.mean(), stl.trend.mean(), stl.seasonal.mean(), stl.resid.mean()],
+                            "std":  [stl.observed.std(),  stl.trend.std(),  stl.seasonal.std(),  stl.resid.std()],
+                        },
+                        index=["Observed", "Trend", "Seasonal", "Resid"],
+                    ).reset_index(names="component")
+                    _st_df(comp_df, use_container_width=True, hide_index=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+    
+                    # Seasonality diagnostics
+                    st.markdown('<div class="block-card"><h4>Seasonality diagnostics</h4>', unsafe_allow_html=True)
+                    var = np.nanvar
+                    tr, se, re = stl.trend.dropna().values, stl.seasonal.dropna().values, stl.resid.dropna().values
+                    n = min(len(tr), len(se), len(re)); tr, se, re = tr[-n:], se[-n:], re[-n:]
+                    Ft = max(0.0, 1 - var(re) / max(var(tr + re), 1e-12))
+                    Fs = max(0.0, 1 - var(re) / max(var(se + re), 1e-12))
+                    vs, vt, vr = var(se), var(tr), var(re); denom = (vs + vt + vr) or np.nan
+                    p = lambda x: "–" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:,.1f}%"
+                    diag_df = pd.DataFrame({
+                        "metric": ["Seasonal strength (Fs)", "Trend strength (Ft)",
+                                   "Variance share · Seasonal", "Variance share · Trend", "Variance share · Residual"],
+                        "value":  [p(Fs), p(Ft), p(vs/denom if denom else np.nan),
+                                   p(vt/denom if denom else np.nan), p(vr/denom if denom else np.nan)]
+                    })
+                    _st_df(diag_df, use_container_width=True, hide_index=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+    
+                    # Autocorrelation + tests
+                    y_clean = pd.Series(y).dropna().values
+                    try:
+                        nlags = int(min(len(y_clean)//2, max(60, 2*max(m, 1))))
+                    except Exception:
+                        nlags = min(len(y_clean)//2, 60)
+    
+                    from statsmodels.tsa.stattools import acf as _acf
+                    peaks = []
+                    try:
+                        ac = _acf(y_clean, nlags=nlags, fft=True)
+                        peaks = sorted([(lag, val) for lag, val in enumerate(ac) if lag > 0],
+                                       key=lambda t: t[1], reverse=True)[:3]
+                    except Exception:
+                        ac = None
+    
+                    colA, colB = st.columns([0.55, 0.45])
+                    with colA:
+                        st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True)
+                        if peaks:
+                            df_top = pd.DataFrame({"top lag": [p[0] for p in peaks], "ACF": [round(p[1], 3) for p in peaks]})
+                        else:
+                            df_top = pd.DataFrame({"top lag": ["–"], "ACF": ["–"]})
+                        _st_df(df_top, use_container_width=True, hide_index=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+    
+                    with colB:
+                        try:
+                            from statsmodels.tsa.stattools import adfuller
+                            adf_p = adfuller(y_clean, autolag="AIC")[1]
+                        except Exception:
+                            adf_p = np.nan
+                        try:
+                            from statsmodels.stats.diagnostic import acorr_ljungbox as _ljung
+                            lb_p = float(_ljung(y_clean, lags=[m or 10], return_df=True)["lb_pvalue"].iloc[0])
+                        except Exception:
+                            lb_p = np.nan
+    
+                        st.markdown('<div class="block-card"><h4>Tests</h4>', unsafe_allow_html=True)
+                        _st_df(
+                            pd.DataFrame(
+                                [
+                                    ("ADF stationarity p", round(adf_p, 4) if not np.isnan(adf_p) else "—"),
+                                    (f"Ljung–Box p @ m={m or 10}", round(lb_p, 4) if not np.isnan(lb_p) else "—"),
+                                ],
+                                columns=["test", "p-value"],
+                            ),
+                            use_container_width=True, hide_index=True,
+                        )
+                        st.markdown("</div>", unsafe_allow_html=True)
+    
+                with R2:
+                    # STL components
+                    st.markdown('<div class="block-card"><h4>Seasonal–Trend Decomposition</h4>', unsafe_allow_html=True)
+                    fig, axes = plt.subplots(4, 1, figsize=(8.8, 5.8), sharex=True)
+                    cols = [0.20, 0.40, 0.60, 0.80]
+                    for ax, s, t, c in zip(
+                        axes,
+                        [stl.observed, stl.trend, stl.seasonal, stl.resid],
+                        ["Observed", "Trend", "Seasonal", "Resid"],
+                        cols,
+                    ):
+                        ax.plot(s, lw=1.8, color=plt.get_cmap("viridis")(c))
+                        ax.set_title(t); ax.grid(alpha=0.5)
+                    fig.tight_layout()
+                    st.pyplot(fig, clear_figure=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+    
+                    # ACF bars (if computed)
+                    if 'ac' in locals() and ac is not None:
+                        st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
+                        max_show = min(nlags, 48)
+                        figc, axc = plt.subplots(figsize=(8.8, 2.6))
+                        axc.bar(range(1, max_show + 1), ac[1:max_show + 1], edgecolor="white", linewidth=0.4)
+                        axc.set_title(f"ACF (first {max_show} lags)")
+                        st.pyplot(figc, clear_figure=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+    
+            st.markdown("</div>", unsafe_allow_html=True)  # close outer block-card
 
+    # # ========================= Seasonality & Decomposition =========================
+    # st.divider()
+    # # st.markdown("## 🌊 Seasonality & Decomposition")
+    # st.markdown('<div class="block-card"><h4>🌊 Seasonality & Decomposition</h4>', unsafe_allow_html=True,)
+    # L2, R2 = st.columns([0.5, 0.5], gap="large")
+
+    # if HAVE_STATSM and y.dropna().shape[0] >= max(2*m, 20):
+    #     stl = STL(y.dropna(), period=max(m,1)).fit()
+
+    #     with L2:
+    #         # st.markdown("#### Component summaries")
+    #         st.markdown('<div class="block-card"><h4>Component Summaries</h4>', unsafe_allow_html=True,)
+    #         comp_df = pd.DataFrame(
+    #             {"mean":[stl.observed.mean(), stl.trend.mean(), stl.seasonal.mean(), stl.resid.mean()],
+    #              "std": [stl.observed.std(),  stl.trend.std(),  stl.seasonal.std(),  stl.resid.std()]},
+    #             index=["Observed","Trend","Seasonal","Resid"]
+    #         ).reset_index(names="component")
+    #         # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    #         _st_df(comp_df, use_container_width=True, hide_index=True)
+    #         st.markdown("</div>", unsafe_allow_html=True)
+
+    #         # st.markdown("#### Seasonality diagnostics")
+    #         st.markdown('<div class="block-card"><h4>Seasonality diagnostics</h4>', unsafe_allow_html=True,)
+    #         var = np.nanvar
+    #         tr, se, re = stl.trend.dropna().values, stl.seasonal.dropna().values, stl.resid.dropna().values
+    #         n = min(len(tr), len(se), len(re)); tr, se, re = tr[-n:], se[-n:], re[-n:]
+    #         Ft = max(0.0, 1 - var(re)/max(var(tr + re), 1e-12))
+    #         Fs = max(0.0, 1 - var(re)/max(var(se + re), 1e-12))
+    #         vs, vt, vr = var(se), var(tr), var(re); denom = (vs + vt + vr) or np.nan
+    #         p = lambda x: "–" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:,.1f}%"
+    #         diag_df = pd.DataFrame({
+    #             "metric": ["Seasonal strength (Fs)", "Trend strength (Ft)",
+    #                        "Variance share · Seasonal", "Variance share · Trend", "Variance share · Residual"],
+    #             "value":  [p(Fs), p(Ft), p(vs/denom if denom else np.nan),
+    #                        p(vt/denom if denom else np.nan), p(vr/denom if denom else np.nan)]
+    #         })
+    #         # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    #         _st_df(diag_df, use_container_width=True, hide_index=True)
+    #         st.markdown("</div>", unsafe_allow_html=True)
+
+    #         # st.markdown("#### Autocorrelation & tests")
+    #         # st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
+    #         y_clean = pd.Series(y).dropna().values
+    #         nlags = int(min(len(y_clean)//2, max(60, 2*m)))
+    #         ac = _acf(y_clean, nlags=nlags, fft=True)
+    #         peaks = [(lag, val) for lag, val in enumerate(ac) if lag > 0]
+    #         peaks.sort(key=lambda t: t[1], reverse=True)
+    #         top_peaks = peaks[:3]
+    #         colA, colB = st.columns([0.55, 0.45])
+
+    #         with colA:
+    #             # Build the small table of top ACF lags safely
+    #             if top_peaks:
+    #                 df_top = pd.DataFrame({
+    #                     "top lag": [p[0] for p in top_peaks],
+    #                     "ACF":     [round(p[1], 3) for p in top_peaks],
+    #                 })
+    #             else:
+    #                 df_top = pd.DataFrame({"top lag": ["–"], "ACF": ["–"]})
+
+    #             st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
+    #             _st_df(df_top, use_container_width=True, hide_index=True)
+    #             st.markdown("</div>", unsafe_allow_html=True)
+
+    #         with colB:
+    #             try:
+    #                 adf_p = adfuller(y_clean, autolag="AIC")[1]
+    #             except Exception:
+    #                 adf_p = np.nan
+
+    #             lags = [m] if m else [10]
+    #             try:
+    #                 lb_p = float(_ljung(y_clean, lags=lags, return_df=True)["lb_pvalue"].iloc[0])
+    #             except Exception:
+    #                 lb_p = np.nan
+
+    #             st.markdown('<div class="block-card"><h4>Tests</h4>', unsafe_allow_html=True,)
+    #             _st_df(
+    #                 pd.DataFrame(
+    #                     [
+    #                         ("ADF stationarity p", round(adf_p, 4) if not np.isnan(adf_p) else "—"),
+    #                         (f"Ljung–Box p @ m={m or 10}", round(lb_p, 4) if not np.isnan(lb_p) else "—"),
+    #                     ],
+    #                     columns=["test", "p-value"],
+    #                 ),
+    #                 use_container_width=True,
+    #                 hide_index=True,
+    #             )
+    #             st.markdown("</div>", unsafe_allow_html=True)
+
+
+    #     with R2:
+    #         # Seasonal–Trend decomposition
+    #         st.markdown('<div class="block-card"><h4>Seasonal–Trend Decomposition</h4>', unsafe_allow_html=True)
+    #         # --- Plot STL components (Observed, Trend, Seasonal, Resid) -------------------
+    #         fig, axes = plt.subplots(4, 1, figsize=(8.8, 5.8), sharex=True)
+    #         cols = [0.20, 0.40, 0.60, 0.80]
+    #         for ax, s, t, c in zip(
+    #             axes,
+    #             [stl.observed, stl.trend, stl.seasonal, stl.resid],
+    #             ["Observed", "Trend", "Seasonal", "Resid"],
+    #             cols,
+    #         ):
+    #             ax.plot(s, lw=1.8, color=plt.get_cmap("viridis")(c))
+    #             ax.set_title(t)
+    #             ax.grid(alpha=0.5)
+    #         fig.tight_layout()
+
+    #         st.pyplot(fig, clear_figure=True)
+    #         st.markdown("</div>", unsafe_allow_html=True)  # close block-card
+
+    #         # --- ACF bars -----------------------------------------------------------------
+    #         st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
+    #         max_show = min(nlags, 48)
+    #         figc, axc = plt.subplots(figsize=(8.8, 2.6))
+    #         axc.bar(range(1, max_show + 1), ac[1 : max_show + 1], edgecolor="white", linewidth=0.4)
+    #         axc.set_title(f"ACF (first {max_show} lags)")
+    #         st.pyplot(figc, clear_figure=True)
+    #         st.markdown("</div>", unsafe_allow_html=True)
+
+
+    # else:
+    #     st.info("Not enough points or library unavailable for STL decomposition — need at least ~2 seasonal cycles.")
+
+    
     # ========================= Rolling CV & Leaderboard =========================
     st.divider()
     # st.markdown("## 🏆 Leaderboard (Rolling Cross Validation)")
