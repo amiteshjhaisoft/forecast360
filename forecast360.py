@@ -4,11 +4,14 @@ import streamlit.components.v1 as components
 
 # --- Page config (call once, at top) ---
 st.set_page_config(
-    page_title="Forecast360",
-    page_icon="🧭",
-    layout="wide",
-    initial_sidebar_state="expanded"  # JS/CSS + flag will still hide it when needed
-)
+    icon_path = Path("assets/forecast360.png")
+    page_icon = Image.open(icon_path) if icon_path.is_file() else "📈"
+
+    st.set_page_config(
+        page_title="Forecast360",
+        page_icon=page_icon,
+        layout="wide",
+    )
 
 # Ensure the flag exists (used by GS CTA + JS visibility)
 st.session_state.setdefault("show_sidebar", False)
