@@ -23,13 +23,8 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 
-
-
 from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
-
-# AI Agent
-from forecast360_chat import run as run_ai_agent
 
 # Patch once so ALL renders/uploads are captured
 if "kb" not in st.session_state:
@@ -345,163 +340,6 @@ def render_kb_footer():
     st.session_state["_kb_last_sig"] = sig
     st.success(f"Snapshot saved to: {out_dir}")
 
-
-
-def page_home():
-    # -- Cache image -> base64 so reruns are fast
-    @st.cache_data(show_spinner=False)
-    def _img_to_base64_first(paths):
-        for p in paths:
-            fp = Path(p)
-            if fp.is_file():
-                try:
-                    return base64.b64encode(fp.read_bytes()).decode("utf-8")
-                except Exception:
-                    continue
-        return None
-
-    img_b64 = _img_to_base64_first(["assets/forecast360.png"])
-
-    # -- Scoped CSS (home only)
-    # -- Styles
-    st.markdown(
-        """
-        <style>
-        .home-wrap{
-            background: radial-gradient(1200px 600px at 10% -10%, rgba(0,183,255,.10), transparent 60%),
-                        radial-gradient(1200px 600px at 110% 110%, rgba(255,79,160,.08), transparent 60%),
-                        linear-gradient(135deg, rgba(255,136,0,.06), rgba(0,183,255,.06) 50%, rgba(255,79,160,.06));
-            border: 1px solid #eaeaea; border-radius: 22px; padding: 22px 22px 14px; margin-bottom: 14px;
-            box-shadow: 0 10px 24px rgba(0,0,0,.04);
-        }
-        .home-cols{ display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; align-items: center; }
-        .home-left h1{ margin: 0 0 8px; font-weight: 800; letter-spacing: .2px; }
-        .home-left h5{ margin: 0 0 10px; font-weight: 600; color:#0f172a; opacity:.85; }
-        .home-left p{ margin: 0 0 10px; color: #334155; line-height:1.5; }
-
-        .home-right{ display:flex; align-items:center; justify-content:center; }
-        .logo-wrap{
-            width: min(360px, 90%);
-            aspect-ratio: 1 / 1;
-            display:flex; align-items:center; justify-content:center;
-            background: radial-gradient(60% 60% at 50% 45%, rgba(255,255,255,.25), transparent 70%);
-            border-radius: 50%;
-            box-shadow: 0 20px 40px rgba(2, 6, 23, 0.12), inset 0 1px 0 rgba(255,255,255,.3);
-        }
-        .logo-wrap img{
-            width: 100%; height: auto; display:block;
-            filter: drop-shadow(0 10px 24px rgba(2, 6, 23, 0.16));
-            border-radius: 50%;
-        }
-
-        .kpis{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; }
-        .kcard{
-            background:#fff; border:1px solid #eee; border-radius:16px; padding:14px 16px;
-            box-shadow: 0 6px 16px rgba(0,0,0,.05);
-        }
-        .kcard h4{ margin:0 0 6px; font-size:18px; }
-        .kcard p{ margin:0; color:#475569; font-size:13px; }
-
-        /* Small, subtle footer inside the hero */
-        .home-footer{
-            margin-top: 8px;
-            text-align: center;
-            font-size: 12px;
-            line-height: 1.4;
-            opacity: .75;
-        }
-        @media (max-width: 1100px){
-            .home-cols{ grid-template-columns: 1fr; gap: 18px; }
-            .logo-wrap{ width:min(300px, 70%); margin: 6px auto 0; }
-            .kpis{ grid-template-columns: repeat(2, 1fr); }
-        }
-        @media (max-width: 680px){
-            .kpis{ grid-template-columns: 1fr; }
-            .home-footer{ font-size: 11px; }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # -- Hero
-    st.markdown(
-        f"""
-        <div class="home-wrap">
-        <div class="home-cols">
-            <div class="home-left">
-            <h1 class="hero-title">Forecast360</h1>
-            <h5>AI Powered Forecasting. No Code. Decisions in Minutes.</h5>
-            <p>Upload any time series, auto-profile, compare models, forecast with confidence intervals,
-                and turn it into <b>actionable decisions</b> with an AI analyst, speech and a talking avatar.</p>
-            <p>Bring your own local LLM via <b>Ollama</b> or connect <b>Claude.ai</b>.
-                Data stays local; artifacts live in your local <b>Knowledge Base</b>.</p>
-            </div>
-            <div class="home-right">
-            <div class="logo-wrap">
-                {("<img src='data:image/png;base64," + img_b64 + "' alt='Forecast360 logo'/>") if img_b64 else ""}
-            </div>
-            </div>
-        </div>
-
-        <div class="home-footer">© {datetime.now().year} iSOFT ANZ Pvt Ltd. All rights reserved.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def main():
-    icon_path = Path("assets/forecast360.png")
-    page_icon = Image.open(icon_path) if icon_path.is_file() else "📈"
-
-    st.set_page_config(
-        page_title="Forecast360",
-        page_icon=page_icon,
-        layout="wide",
-    )
-    page_home()  # make sure page_home() is imported/defined
-
-if __name__ == "__main__":
-    main()
-
-
-# st.divider()
-
-# --- Render the CTA button ONLY if sidebar not shown yet ---
-if not st.session_state.get("show_sidebar", False):
-
-    # Inject styles once
-    if not st.session_state.get("_home_btn_css"):
-        st.session_state["_home_btn_css"] = True
-        st.markdown("""
-        <style>
-          /* shared center-row so this aligns with copyright block */
-          .hero-center-row{display:flex;justify-content:center;margin:18px 0 6px;}
-
-          /* pretty pill button */
-          .hero-center-row .stButton>button{
-            padding:10px 28px;font-weight:700;font-size:16px;letter-spacing:.2px;border:0;border-radius:999px;color:#fff;
-            background:linear-gradient(135deg,#0b1f3a 0%,#12497b 55%,#2a7cc4 100%);
-            box-shadow:0 10px 22px rgba(18,73,123,.28),0 2px 6px rgba(0,0,0,.06);
-            transition:transform .12s ease, box-shadow .12s ease, filter .12s ease; cursor:pointer;
-          }
-          .hero-center-row .stButton>button:hover{transform:translateY(-1px);box-shadow:0 14px 30px rgba(18,73,123,.32),0 4px 10px rgba(0,0,0,.08);filter:brightness(1.06) saturate(1.05);}
-          .hero-center-row .stButton>button:active{transform:translateY(0);box-shadow:0 8px 18px rgba(18,73,123,.22),0 2px 6px rgba(0,0,0,.06);}
-          .hero-center-row .stButton>button:focus{outline:none;}
-          .hero-center-row .stButton>button:focus-visible{box-shadow:0 0 0 4px rgba(34,197,94,.35),0 10px 22px rgba(18,73,123,.28);}
-        </style>
-        """, unsafe_allow_html=True)
-
-    # Centered exactly in the middle column so it lines up with copyright block
-    btn_l, btn_c, btn_r = st.columns([1, 1, 1])
-    with btn_c:
-        st.markdown('<div class="hero-center-row">', unsafe_allow_html=True)
-        if st.button("Let's Start Time Series Data Forecasting", key="start_btn"):
-            st.session_state["show_sidebar"] = True
-        st.markdown("</div>", unsafe_allow_html=True)
-
-
 # ------ Sidebar Code -----
 
 ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
@@ -515,20 +353,6 @@ def render_sidebar() -> None:
 
         st.subheader("🚀 Getting Started")
 
-        # # ---- Data Upload -----------------------------------------------------
-        # st.header("📂 Data Upload")
-        # up = st.file_uploader(
-        #     "Upload CSV / Excel / JSON / Parquet / XML",
-        #     type=ACCEPTED_EXTS,
-        #     accept_multiple_files=False,
-        #     key="gs_file",
-        # )
-        # xml_xpath = st.text_input(
-        #     "XML row path (optional XPath)",
-        #     value=st.session_state.get("xml_xpath", ""),
-        #     help="e.g., .//row  or  .//record  or  .//item",
-        #     key="xml_xpath",
-        # )
         # ---- Data Upload -----------------------------------------------------
         st.header("📂 Data Upload")
         up = st.file_uploader(
@@ -557,37 +381,6 @@ def render_sidebar() -> None:
 
         st.divider()
         st.markdown("**🔎 Column detection — Automatic**")
-
-        # # ---- Read uploaded file ---------------------------------------------
-        # _data, source_name = None, None
-        # if up is not None:
-        #     try:
-        #         if "cached_read" in globals() and callable(globals().get("cached_read")):
-        #             _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
-        #         else:
-        #             ext = Path(up.name).suffix.lower()
-        #             raw = up.getvalue()
-        #             if ext == ".csv":
-        #                 _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
-        #             elif ext in {".xlsx", ".xls"}:
-        #                 _data = pd.read_excel(up)
-        #             elif ext == ".json":
-        #                 _data = pd.read_json(io.BytesIO(raw))
-        #             elif ext == ".parquet":
-        #                 _data = pd.read_parquet(io.BytesIO(raw))
-        #             elif ext == ".xml":
-        #                 try:
-        #                     _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
-        #                 except Exception:
-        #                     _data = pd.read_xml(io.BytesIO(raw))
-        #             else:
-        #                 st.warning(f"Unsupported extension: {ext}")
-        #                 _data = None
-        #         source_name = up.name
-        #         st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
-        #     except Exception as e:
-        #         st.error(f"Failed to read file: {e}")
-        #         _data, source_name = None, None
 
         # ---- Read uploaded file ---------------------------------------------
         _data, source_name = None, None
