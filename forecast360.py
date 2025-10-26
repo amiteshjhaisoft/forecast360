@@ -76,8 +76,7 @@ with tab_home:
     page_home()  # Sidebar hidden
 
 with tab_gs:
-    render()
-    render_sidebar()     # Sidebar visible only here
+    page_getting_started()     # Sidebar visible only here
 
 with tab_agent:
     render_agent()          # Sidebar hidden
