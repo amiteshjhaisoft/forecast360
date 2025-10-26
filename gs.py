@@ -345,7 +345,6 @@ def render_kb_footer():
     st.success(f"Snapshot saved to: {out_dir}")
 
 def render():
-    def page_getting_started():
     """
     Full Getting Started page:
       - Summary, Preview, Profile, Boxplot-by-Category, Correlation
@@ -2070,7 +2069,6 @@ def render():
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 def render_sidebar():
-    def sidebar_getting_started():
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
     with st.sidebar:
         # ---- Branding --------------------------------------------------------
