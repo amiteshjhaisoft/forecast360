@@ -1584,15 +1584,19 @@ def page_getting_started():
         # heuristic by resample freq
         return {"D": 7, "W": 52, "M": 12, "Q": 4}.get(freq_opt)  # None if "raw" or unknown
     
-    # Ensure we have df in scope; use your working frame (dfd if present)
-    _df_for_stl = locals().get("dfd", None) or st.session_state.get("uploaded_df")
+    # ---- Safely resolve the dataframe (NO boolean evaluation on DataFrame) ----
+    _df_for_stl = locals().get("dfd", None)
+    if not isinstance(_df_for_stl, pd.DataFrame):
+        _df_for_stl = st.session_state.get("uploaded_df", None)
+    
+    is_df = isinstance(_df_for_stl, pd.DataFrame) and not _df_for_stl.empty
+    cols = list(_df_for_stl.columns) if is_df else []
     
     can_run = (
-        HAVE_STATSM
-        and isinstance(_df_for_stl, pd.DataFrame)
-        and _df_for_stl is not None
-        and date_col in (list(_df_for_stl.columns) if isinstance(_df_for_stl, pd.DataFrame) else [])
-        and target_col in (list(_df_for_stl.columns) if isinstance(_df_for_stl, pd.DataFrame) else [])
+        bool(HAVE_STATSM)
+        and is_df
+        and (date_col in cols)
+        and (target_col in cols)
     )
     
     if not can_run:
@@ -1604,8 +1608,10 @@ def page_getting_started():
         min_needed = max(2 * max(m, 1), 20)  # need ~2 seasonal cycles; also a floor of 20 points
     
         if len(y.dropna()) < min_needed:
-            st.info(f"Not enough points for STL — need ≥ ~2 seasonal cycles "
-                    f"(required ≥ {max(2*m, 20)} points; have {len(y.dropna())}).")
+            st.info(
+                f"Not enough points for STL — need ≥ ~2 seasonal cycles "
+                f"(required ≥ {max(2*m, 20)} points; have {len(y.dropna())})."
+            )
             st.markdown("</div>", unsafe_allow_html=True)
         else:
             # --- STL ---
@@ -1648,20 +1654,21 @@ def page_getting_started():
                     st.markdown("</div>", unsafe_allow_html=True)
     
                     # Autocorrelation + tests
+                    ac = None
+                    nlags = 0
                     y_clean = pd.Series(y).dropna().values
                     try:
                         nlags = int(min(len(y_clean)//2, max(60, 2*max(m, 1))))
                     except Exception:
                         nlags = min(len(y_clean)//2, 60)
     
-                    from statsmodels.tsa.stattools import acf as _acf
-                    peaks = []
                     try:
+                        from statsmodels.tsa.stattools import acf as _acf
                         ac = _acf(y_clean, nlags=nlags, fft=True)
                         peaks = sorted([(lag, val) for lag, val in enumerate(ac) if lag > 0],
                                        key=lambda t: t[1], reverse=True)[:3]
                     except Exception:
-                        ac = None
+                        peaks = []
     
                     colA, colB = st.columns([0.55, 0.45])
                     with colA:
@@ -1716,7 +1723,7 @@ def page_getting_started():
                     st.markdown("</div>", unsafe_allow_html=True)
     
                     # ACF bars (if computed)
-                    if 'ac' in locals() and ac is not None:
+                    if ac is not None and nlags > 0:
                         st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
                         max_show = min(nlags, 48)
                         figc, axc = plt.subplots(figsize=(8.8, 2.6))
