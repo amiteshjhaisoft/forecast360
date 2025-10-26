@@ -316,6 +316,10 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
     prelim = [x for x in prelim if x.get("text")]
     if not prelim:
         return []
+    # optional: drop low-relevance hits to keep answers focused
+    prelim = [h for h in prelim if h.get("score", 0.0) >= 0.55]
+    if not prelim:
+        return []
     # simple diversity: cap near-duplicates
     uniq, seen = [], set()
     for c in prelim:
@@ -327,6 +331,10 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
 
 # ============================ LLM Synthesis & Query Rewrite ============================
 
+def _short_label(s: str) -> str:
+    s = (s or "").strip().replace("\\", "/")
+    return s.rsplit("/", 1)[-1][:80] if s else ""
+
 def _anthropic_answer(question: str, kb_blocks: List[str], sources: List[str]) -> Optional[str]:
     """Synthesize an answer strictly from KB blocks. If model absent/unavailable, return None."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
@@ -337,7 +345,7 @@ def _anthropic_answer(question: str, kb_blocks: List[str], sources: List[str]) -
     except Exception:
         return None
 
-    src_line = ", ".join(sorted({s for s in sources if s})) or "KB"
+    src_line = ", ".join(sorted({_short_label(s) for s in sources if s})) or "KB"
     prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
         question=question,
         kb="\n".join(f"- {c}" for c in kb_blocks)
@@ -412,7 +420,7 @@ class Forecast360Agent:
 
         # 4) Fallback: compact extractive bullets + sources
         bullets = [f"- {s}" for s in excerpts[:6]]
-        src_line = ", ".join(sorted({s for s in sources if s})) or "KB"
+        src_line = ", ".join(sorted({_short_label(s) for s in sources if s})) or "KB"
         return "\n".join(bullets + [f"Sources: {src_line}"])
 
     def respond(self, user_q: str) -> str:
@@ -434,6 +442,9 @@ def _render_agent_core(set_config: bool = False):
     if set_config:
         st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
 
+    # ensure GS pause counter exists for other tabs to check
+    st.session_state.setdefault("gs_pause_ticks", 0)
+
     st.markdown("""
     <style>
     .stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
@@ -448,7 +459,11 @@ def _render_agent_core(set_config: bool = False):
 
     # Header
     c1, c2 = st.columns([1, 8], vertical_alignment="center")
-    with c1: st.image(ASSISTANT_ICON, width=80)
+    with c1:
+        if os.path.exists(ASSISTANT_ICON):
+            st.image(ASSISTANT_ICON, width=80)
+        else:
+            st.markdown("🤖", unsafe_allow_html=True)
     with c2:
         st.markdown("### Forecast360 AI Agent")
         st.caption(f"Knowledge Base Collection: **{COLLECTION_NAME}**")
@@ -516,7 +531,7 @@ def _render_agent_core(set_config: bool = False):
 
     # Render chat history
     for m in st.session_state["messages"]:
-        avatar = ASSISTANT_ICON if m["role"] == "assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
+        avatar = ASSISTANT_ICON if (m["role"] == "assistant" and os.path.exists(ASSISTANT_ICON)) else (USER_ICON if os.path.exists(USER_ICON) else "👤")
         with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
 
@@ -527,7 +542,7 @@ def _render_agent_core(set_config: bool = False):
         st.session_state["messages"].append({"role": "user", "content": pq})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(pq)
-        with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        with st.chat_message("assistant", avatar=(ASSISTANT_ICON if os.path.exists(ASSISTANT_ICON) else "🤖")):
             loading_msg = random.choice(PROMPTS["loading"])
             with st.spinner(loading_msg):
                 reply = agent.respond(pq)
@@ -541,7 +556,7 @@ def _render_agent_core(set_config: bool = False):
         st.session_state["messages"].append({"role": "user", "content": user_q})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(user_q)
-        with st.chat_message("assistant", avatar=ASSISTANT_ICON):
+        with st.chat_message("assistant", avatar=(ASSISTANT_ICON if os.path.exists(ASSISTANT_ICON) else "🤖")):
             loading_msg = random.choice(PROMPTS["loading"])
             with st.spinner(loading_msg):
                 reply = agent.respond(user_q)
