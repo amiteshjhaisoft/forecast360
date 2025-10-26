@@ -31,15 +31,15 @@ azure-identity>=1.17.1
 # python-magic-bin; platform_system=="Windows"
 
 # --- Time-series / ML (uncomment when models are wired in the UI) ---
-# scikit-learn
-# statsmodels
-# scipy
-# pmdarima
-# prophet                  # heavy; needs compiler toolchain
-# tbats
-# xgboost
-# lightgbm
-# darts                    # heavy; pulls torch & lightning
+scikit-learn
+statsmodels
+scipy
+pmdarima
+prophet                  # heavy; needs compiler toolchain
+tbats
+xgboost
+lightgbm
+darts                    # heavy; pulls torch & lightning
 
 # --- RAG / Vector / LLM (only if you actually use them) ---
 # langchain-core>=0.2.14,<0.3
