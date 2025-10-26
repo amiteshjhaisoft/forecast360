@@ -2,53 +2,82 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-from home import page_home
-from gs import render as render_getting_started, render_sidebar as render_gs_sidebar
-from agent import render_agent
-
+# --- Page config (call once, at top) ---
 st.set_page_config(
-    page_title="Three-Tab App",
+    page_title="Forecast360",
     page_icon="🧭",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded"  # JS/CSS will hide it for Home & AI Agent
 )
 
-# --- Tabs ---
-tab_home, tab_gs, tab_agent = st.tabs(["Home", "Getting Started", "AI Agent"])
+# --- Imports for the three tabs ---
+from home import page_home
+from gs import render as render_getting_started, render_sidebar as render_gs_sidebar
+from agent import render_agent  # must expose render_agent() in agent.py
 
 # --- Sidebar visibility controller (JS + CSS) ---
+# Shows sidebar ONLY on "Getting Started", hides it on "Home" and "AI Agent".
 components.html(
     """
     <script>
-    const setBodyTab = () => {
+    (function () {
       const doc = window.parent.document;
-      const tabs = doc.querySelectorAll('button[role="tab"]');
-      if (!tabs || !tabs.length) return;
-      const active = Array.from(tabs).find(t => t.getAttribute('aria-selected') === 'true');
-      const label = active ? active.textContent.trim() : '';
-      doc.body.setAttribute('data-tab', label);
-    };
-    setBodyTab();
-    const obs = new MutationObserver(setBodyTab);
-    obs.observe(window.parent.document, { subtree: true, attributes: true, attributeFilter: ['aria-selected'] });
+
+      function activeLabel() {
+        const btn = doc.querySelector('div[role="tablist"] button[role="tab"][aria-selected="true"]');
+        return btn ? btn.textContent.trim() : '';
+      }
+
+      function toggleSidebar() {
+        const label = activeLabel();
+        const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        const chevron = doc.querySelector('[data-testid="collapsedControl"]');
+
+        // Tag body so CSS can act as a fallback
+        doc.body.setAttribute('data-tab', label);
+
+        if (!sidebar) return;
+        if (label === "Getting Started") {
+          sidebar.style.display = "";
+          if (chevron) chevron.style.display = "";
+        } else {
+          sidebar.style.display = "none";
+          if (chevron) chevron.style.display = "none";
+        }
+      }
+
+      // Observe tab selection changes
+      const obs = new MutationObserver(toggleSidebar);
+      obs.observe(doc, { subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+
+      window.addEventListener("hashchange", toggleSidebar);
+      window.addEventListener("load", toggleSidebar);
+      toggleSidebar();
+    })();
     </script>
+
     <style>
-    body[data-tab="Home"] section[data-testid="stSidebar"] { display: none !important; }
-    body[data-tab="AI Agent"] section[data-testid="stSidebar"] { display: none !important; }
-    body[data-tab="Home"] [data-testid="collapsedControl"],
-    body[data-tab="AI Agent"] [data-testid="collapsedControl"] { display: none !important; }
+      /* CSS fallback to guarantee hiding on Home & AI Agent */
+      body[data-tab="Home"] section[data-testid="stSidebar"],
+      body[data-tab="AI Agent"] section[data-testid="stSidebar"] { display: none !important; }
+
+      body[data-tab="Home"] [data-testid="collapsedControl"],
+      body[data-tab="AI Agent"] [data-testid="collapsedControl"] { display: none !important; }
     </style>
     """,
     height=0,
 )
 
-# --- Render tabs ---
+# --- Tabs ---
+tab_home, tab_gs, tab_agent = st.tabs(["Home", "Getting Started", "AI Agent"])
+
+# --- Render each tab ---
 with tab_home:
-    page_home()  # uses your home.py
+    page_home()  # Sidebar hidden
 
 with tab_gs:
     render_getting_started()
-    render_gs_sidebar()  # sidebar shows only on this tab
+    render_gs_sidebar()     # Sidebar visible only here
 
 with tab_agent:
-    render_agent()
+    render_agent()          # Sidebar hidden
