@@ -427,37 +427,6 @@ def sidebar_getting_started():
         st.divider()
         st.markdown("**🔎 Column detection — Automatic**")
 
-        # # ---- Read uploaded file ---------------------------------------------
-        # _data, source_name = None, None
-        # if up is not None:
-        #     try:
-        #         if "cached_read" in globals() and callable(globals().get("cached_read")):
-        #             _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
-        #         else:
-        #             ext = Path(up.name).suffix.lower()
-        #             raw = up.getvalue()
-        #             if ext == ".csv":
-        #                 _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
-        #             elif ext in {".xlsx", ".xls"}:
-        #                 _data = pd.read_excel(up)
-        #             elif ext == ".json":
-        #                 _data = pd.read_json(io.BytesIO(raw))
-        #             elif ext == ".parquet":
-        #                 _data = pd.read_parquet(io.BytesIO(raw))
-        #             elif ext == ".xml":
-        #                 try:
-        #                     _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
-        #                 except Exception:
-        #                     _data = pd.read_xml(io.BytesIO(raw))
-        #             else:
-        #                 st.warning(f"Unsupported extension: {ext}")
-        #                 _data = None
-        #         source_name = up.name
-        #         st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
-        #     except Exception as e:
-        #         st.error(f"Failed to read file: {e}")
-        #         _data, source_name = None, None
-
         # ---- Read uploaded file ---------------------------------------------
         _data, source_name = None, None
         
@@ -996,40 +965,7 @@ def page_getting_started():
         denom = np.clip((np.abs(a) + np.abs(b)) / 2.0, 1e-9, None)
         return float(np.mean(np.abs(a - b) / denom) * 100.0) if len(a) else float("nan")
 
-    # ---------------------- Read Uploaded Data from State ----------------------
-    # --- Render the CTA button ONLY if sidebar not shown yet ---
-    if not st.session_state.get("show_sidebar", False):
-    
-        # Inject styles once
-        if not st.session_state.get("_home_btn_css"):
-            st.session_state["_home_btn_css"] = True
-            st.markdown("""
-            <style>
-              /* shared center-row so this aligns with copyright block */
-              .hero-center-row{display:flex;justify-content:center;margin:18px 0 6px;}
-    
-              /* pretty pill button */
-              .hero-center-row .stButton>button{
-                padding:10px 28px;font-weight:700;font-size:16px;letter-spacing:.2px;border:0;border-radius:999px;color:#fff;
-                background:linear-gradient(135deg,#0b1f3a 0%,#12497b 55%,#2a7cc4 100%);
-                box-shadow:0 10px 22px rgba(18,73,123,.28),0 2px 6px rgba(0,0,0,.06);
-                transition:transform .12s ease, box-shadow .12s ease, filter .12s ease; cursor:pointer;
-              }
-              .hero-center-row .stButton>button:hover{transform:translateY(-1px);box-shadow:0 14px 30px rgba(18,73,123,.32),0 4px 10px rgba(0,0,0,.08);filter:brightness(1.06) saturate(1.05);}
-              .hero-center-row .stButton>button:active{transform:translateY(0);box-shadow:0 8px 18px rgba(18,73,123,.22),0 2px 6px rgba(0,0,0,.06);}
-              .hero-center-row .stButton>button:focus{outline:none;}
-              .hero-center-row .stButton>button:focus-visible{box-shadow:0 0 0 4px rgba(34,197,94,.35),0 10px 22px rgba(18,73,123,.28);}
-            </style>
-            """, unsafe_allow_html=True)
-    
-        # Centered exactly in the middle column so it lines up with copyright block
-        btn_l, btn_c, btn_r = st.columns([1, 1, 1])
-        with btn_c:
-            st.markdown('<div class="hero-center-row">', unsafe_allow_html=True)
-            if st.button("Let's Start Time Series Data Forecasting", key="start_btn"):
-                st.session_state["show_sidebar"] = True
-            st.markdown("</div>", unsafe_allow_html=True)    
-        
+    # ---------------------- Read Uploaded Data from State ----------------------       
     st.markdown("---")
     df          = st.session_state.get("uploaded_df")
     source_name = st.session_state.get("source_name") or ""
