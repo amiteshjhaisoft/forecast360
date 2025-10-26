@@ -105,6 +105,12 @@ ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
 
 def sidebar_getting_started():
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
+
+    # 🚫 Pause GS when the Agent tab fires a chat rerun
+    if int(st.session_state.get("gs_pause_ticks", 0)) > 0:
+        st.session_state["gs_pause_ticks"] = int(st.session_state["gs_pause_ticks"]) - 1
+        st.stop()  # skip the rest of GS sidebar for this rerun
+
     # 🔒 Only show the sidebar after user explicitly starts Getting Started
     if not st.session_state.get("show_sidebar", False):
         return
@@ -778,8 +784,6 @@ def sidebar_getting_started():
         st.divider()
 
 # ------ Sidebar Code End -----  
-
-
 def page_getting_started():
     """
     Full Getting Started page:
@@ -791,11 +795,18 @@ def page_getting_started():
       - Residual diagnostics: ACF, PACF, residual stats & plot
     Visuals use a single professional theme for consistency.
     """
-    # If the Agent tab is handling a chat turn, skip heavy GS rendering this run
-    if st.session_state.get("_suspend_gs", False):
-        return
 
-    # If you gate GS by a CTA, honor that here
+    # 🚫 Skip heavy GS rendering during Agent-triggered reruns
+    # Back-compat: honor old boolean flag if it exists
+    if st.session_state.get("_suspend_gs", False):
+        st.stop()
+
+    # New guard: a small counter the Agent sets (e.g., 2) to pause GS for N reruns
+    if int(st.session_state.get("gs_pause_ticks", 0)) > 0:
+        st.session_state["gs_pause_ticks"] = int(st.session_state["gs_pause_ticks"]) - 1
+        st.stop()
+
+    # 🔒 If you gate GS by a CTA, honor that here
     if not st.session_state.get("show_sidebar", False):
         st.info("Click **Start** on the Getting Started tab to begin.")
         return
@@ -1742,131 +1753,6 @@ def page_getting_started():
                         st.markdown("</div>", unsafe_allow_html=True)
     
             st.markdown("</div>", unsafe_allow_html=True)  # close outer block-card
-
-    # # ========================= Seasonality & Decomposition =========================
-    # st.divider()
-    # # st.markdown("## 🌊 Seasonality & Decomposition")
-    # st.markdown('<div class="block-card"><h4>🌊 Seasonality & Decomposition</h4>', unsafe_allow_html=True,)
-    # L2, R2 = st.columns([0.5, 0.5], gap="large")
-
-    # if HAVE_STATSM and y.dropna().shape[0] >= max(2*m, 20):
-    #     stl = STL(y.dropna(), period=max(m,1)).fit()
-
-    #     with L2:
-    #         # st.markdown("#### Component summaries")
-    #         st.markdown('<div class="block-card"><h4>Component Summaries</h4>', unsafe_allow_html=True,)
-    #         comp_df = pd.DataFrame(
-    #             {"mean":[stl.observed.mean(), stl.trend.mean(), stl.seasonal.mean(), stl.resid.mean()],
-    #              "std": [stl.observed.std(),  stl.trend.std(),  stl.seasonal.std(),  stl.resid.std()]},
-    #             index=["Observed","Trend","Seasonal","Resid"]
-    #         ).reset_index(names="component")
-    #         # st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    #         _st_df(comp_df, use_container_width=True, hide_index=True)
-    #         st.markdown("</div>", unsafe_allow_html=True)
-
-    #         # st.markdown("#### Seasonality diagnostics")
-    #         st.markdown('<div class="block-card"><h4>Seasonality diagnostics</h4>', unsafe_allow_html=True,)
-    #         var = np.nanvar
-    #         tr, se, re = stl.trend.dropna().values, stl.seasonal.dropna().values, stl.resid.dropna().values
-    #         n = min(len(tr), len(se), len(re)); tr, se, re = tr[-n:], se[-n:], re[-n:]
-    #         Ft = max(0.0, 1 - var(re)/max(var(tr + re), 1e-12))
-    #         Fs = max(0.0, 1 - var(re)/max(var(se + re), 1e-12))
-    #         vs, vt, vr = var(se), var(tr), var(re); denom = (vs + vt + vr) or np.nan
-    #         p = lambda x: "–" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:,.1f}%"
-    #         diag_df = pd.DataFrame({
-    #             "metric": ["Seasonal strength (Fs)", "Trend strength (Ft)",
-    #                        "Variance share · Seasonal", "Variance share · Trend", "Variance share · Residual"],
-    #             "value":  [p(Fs), p(Ft), p(vs/denom if denom else np.nan),
-    #                        p(vt/denom if denom else np.nan), p(vr/denom if denom else np.nan)]
-    #         })
-    #         # st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    #         _st_df(diag_df, use_container_width=True, hide_index=True)
-    #         st.markdown("</div>", unsafe_allow_html=True)
-
-    #         # st.markdown("#### Autocorrelation & tests")
-    #         # st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
-    #         y_clean = pd.Series(y).dropna().values
-    #         nlags = int(min(len(y_clean)//2, max(60, 2*m)))
-    #         ac = _acf(y_clean, nlags=nlags, fft=True)
-    #         peaks = [(lag, val) for lag, val in enumerate(ac) if lag > 0]
-    #         peaks.sort(key=lambda t: t[1], reverse=True)
-    #         top_peaks = peaks[:3]
-    #         colA, colB = st.columns([0.55, 0.45])
-
-    #         with colA:
-    #             # Build the small table of top ACF lags safely
-    #             if top_peaks:
-    #                 df_top = pd.DataFrame({
-    #                     "top lag": [p[0] for p in top_peaks],
-    #                     "ACF":     [round(p[1], 3) for p in top_peaks],
-    #                 })
-    #             else:
-    #                 df_top = pd.DataFrame({"top lag": ["–"], "ACF": ["–"]})
-
-    #             st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
-    #             _st_df(df_top, use_container_width=True, hide_index=True)
-    #             st.markdown("</div>", unsafe_allow_html=True)
-
-    #         with colB:
-    #             try:
-    #                 adf_p = adfuller(y_clean, autolag="AIC")[1]
-    #             except Exception:
-    #                 adf_p = np.nan
-
-    #             lags = [m] if m else [10]
-    #             try:
-    #                 lb_p = float(_ljung(y_clean, lags=lags, return_df=True)["lb_pvalue"].iloc[0])
-    #             except Exception:
-    #                 lb_p = np.nan
-
-    #             st.markdown('<div class="block-card"><h4>Tests</h4>', unsafe_allow_html=True,)
-    #             _st_df(
-    #                 pd.DataFrame(
-    #                     [
-    #                         ("ADF stationarity p", round(adf_p, 4) if not np.isnan(adf_p) else "—"),
-    #                         (f"Ljung–Box p @ m={m or 10}", round(lb_p, 4) if not np.isnan(lb_p) else "—"),
-    #                     ],
-    #                     columns=["test", "p-value"],
-    #                 ),
-    #                 use_container_width=True,
-    #                 hide_index=True,
-    #             )
-    #             st.markdown("</div>", unsafe_allow_html=True)
-
-
-    #     with R2:
-    #         # Seasonal–Trend decomposition
-    #         st.markdown('<div class="block-card"><h4>Seasonal–Trend Decomposition</h4>', unsafe_allow_html=True)
-    #         # --- Plot STL components (Observed, Trend, Seasonal, Resid) -------------------
-    #         fig, axes = plt.subplots(4, 1, figsize=(8.8, 5.8), sharex=True)
-    #         cols = [0.20, 0.40, 0.60, 0.80]
-    #         for ax, s, t, c in zip(
-    #             axes,
-    #             [stl.observed, stl.trend, stl.seasonal, stl.resid],
-    #             ["Observed", "Trend", "Seasonal", "Resid"],
-    #             cols,
-    #         ):
-    #             ax.plot(s, lw=1.8, color=plt.get_cmap("viridis")(c))
-    #             ax.set_title(t)
-    #             ax.grid(alpha=0.5)
-    #         fig.tight_layout()
-
-    #         st.pyplot(fig, clear_figure=True)
-    #         st.markdown("</div>", unsafe_allow_html=True)  # close block-card
-
-    #         # --- ACF bars -----------------------------------------------------------------
-    #         st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
-    #         max_show = min(nlags, 48)
-    #         figc, axc = plt.subplots(figsize=(8.8, 2.6))
-    #         axc.bar(range(1, max_show + 1), ac[1 : max_show + 1], edgecolor="white", linewidth=0.4)
-    #         axc.set_title(f"ACF (first {max_show} lags)")
-    #         st.pyplot(figc, clear_figure=True)
-    #         st.markdown("</div>", unsafe_allow_html=True)
-
-
-    # else:
-    #     st.info("Not enough points or library unavailable for STL decomposition — need at least ~2 seasonal cycles.")
-
     
     # ========================= Rolling CV & Leaderboard =========================
     st.divider()
