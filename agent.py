@@ -1,13 +1,12 @@
-# agent.py  (Drop-in replacement)
 # Author: Amitesh Jha | iSoft
-# Forecast360 AI Agent — RAG + App-State Awareness (Weaviate v4)
+# Forecast360 AI Agent — Strict RAG (Weaviate collection: Forecast360) → (optional) Claude
+# Weaviate v4 client compatible
 
 from __future__ import annotations
-import os, re, json, itertools, random, math
+import os, re, json, itertools, random
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 import streamlit as st
 
 # --- Embeddings (for query vectors) ---
@@ -37,12 +36,9 @@ def _sget(section: str, key: str, default: Any = None) -> Any:
 WEAVIATE_URL       = _sget("weaviate", "url", "")
 WEAVIATE_API_KEY   = _sget("weaviate", "api_key", "")
 COLLECTION_NAME    = _sget("weaviate", "collection", "Forecast360").strip()  # REQUIRED
-TEXT_PROP_OVERRIDE = _sget("weaviate", "text_property", None)
-SRC_PROP_OVERRIDE  = _sget("weaviate", "source_property", None)
 
 EMB_MODEL_NAME     = _sget("rag", "embed_model", "sentence-transformers/all-MiniLM-L6-v2")
-TOP_K_DEFAULT      = int(_sget("rag", "top_k", 8))
-MAX_SENTS_DEFAULT  = int(_sget("rag", "max_sents", 6))
+TOP_K              = int(_sget("rag", "top_k", 8))
 
 ANTHROPIC_MODEL    = _sget("anthropic", "model", "claude-sonnet-4-5")
 ANTHROPIC_KEY      = _sget("anthropic", "api_key")
@@ -62,38 +58,44 @@ PROMPTS = {
         "You are the Forecast360 AI Agent — a professional Decision-Intelligence and Time-Series Forecasting "
         "assistant developed by iSoft ANZ Pvt Ltd.\n\n"
         "Purpose:\n"
-        "You help users understand, operate, and optimize Forecast360 — for data ingestion, feature engineering, "
-        "model training, validation, forecasting, and visualization of time-series data.\n\n"
+        "You help users understand, operate, and optimize Forecast360 — a platform for data ingestion, feature "
+        "engineering, model training, validation, forecasting, and visualization of time-series data.\n\n"
         "Persona:\n"
-        "- Speak as “I/me/my”. Be analytical, precise, supportive.\n"
-        "- Explain clearly: technical but approachable.\n"
-        "- Be grounded: never invent. If info is missing, respond exactly: “Insufficient Context.”\n"
-        "- Avoid URLs or speculation.\n\n"
-        "Scope:\n"
-        "- Forecast360 modules, architecture, connectors, pipelines, dashboards.\n"
-        "- Algorithms (ARIMA/SARIMA/Prophet/TBATS/XGBoost/LightGBM/TFT etc.).\n"
-        "- Metrics (RMSE/MAE/MASE/MAPE/sMAPE/R² etc.).\n"
-        "- Azure integrations (Blob/Databricks/Synapse/ADF), versioning, CV/leaderboards.\n"
-        "- App state: uploaded data, chosen columns, resampling, transforms, forecasts.\n\n"
+        "- You speak as “We” or “Our team”.\n"
+        "- You are analytical, precise, and supportive.\n"
+        "- You explain concepts clearly — technical but approachable.\n"
+        "- You never guess; if information is not found in context, say “Insufficient Context.”\n"
+        "- Avoid URLs or speculative statements.\n"
+        "- Maintain a professional, solution-oriented tone.\n\n"
+        "Knowledge Scope:\n"
+        "- Forecast360’s modules, architecture, connectors, pipelines, and dashboards.\n"
+        "- Time-series forecasting algorithms (ARIMA, SARIMA, Prophet, TBATS, XGBoost, LightGBM, TFT, etc.).\n"
+        "- Forecast accuracy metrics (RMSE, MAE, MAPE, R², etc.).\n"
+        "- Data preparation, chunking, and embedding techniques.\n"
+        "- Forecast360’s integration with Azure services (Blob, Databricks, Synapse, ADF).\n"
+        "- Model versioning, retraining, and leaderboard evaluation.\n"
+        "- Visualization and decision intelligence workflows.\n\n"
         "Tone:\n"
-        "- Friendly, authoritative, action-oriented. Use bullets or short paragraphs.\n"
+        "- Friendly yet authoritative.\n"
+        "- Use bullet points and concise explanations for technical topics."
     ),
     "retrieval_template": (
-        "Answer strictly using Forecast360’s verified context.\n\n"
+        "Answer the question strictly using Forecast360’s verified knowledge base context.\n\n"
         "Question:\n{question}\n\n"
-        "Knowledge Base Context (Weaviate):\n{kb}\n\n"
-        "Local Session Context (app state):\n{local}\n\n"
+        "Context:\n{ctx}\n\n"
         "Rules:\n"
-        "- Use Forecast360 vocabulary (modules/pipelines/models/metrics/integrations).\n"
-        "- Be concise, factual, structured.\n"
-        "- If info is missing, respond only: “Insufficient Context.”"
+        "- Use the Forecast360 domain vocabulary (models, pipelines, dashboards, metrics, integrations).\n"
+        "- Be concise, factual, and professional.\n"
+        "- Use structured lists or short paragraphs for clarity.\n"
+        "- If information is missing, respond only: “Insufficient Context.”"
     ),
     "query_rewrite": (
-        "Rewrite the question in precise Forecast360/time-series terms. Only return the rewritten query.\n\n"
+        "Reinterpret the user’s question in terms of Forecast360’s time-series forecasting context.\n\n"
         "Examples:\n"
-        "- 'How does it work?' → 'How does Forecast360 perform end-to-end time-series forecasting?'\n"
+        "- 'How does it work?' → 'How does Forecast360 perform time-series forecasting end-to-end?'\n"
         "- 'Which models do you use?' → 'Which forecasting algorithms are implemented in Forecast360?'\n"
-        "- 'How accurate are forecasts?' → 'How does Forecast360 compute and present forecast accuracy?'\n"
+        "- 'How accurate are forecasts?' → 'How does Forecast360 measure and display forecast accuracy?'\n\n"
+        "Return only the rewritten, precise query."
     ),
     "loading": [
         "Analyzing your forecasting query…",
@@ -104,7 +106,7 @@ PROMPTS = {
     ],
 }
 
-
+# Backward-compatible minimal prompts (kept for fallback)
 COMPANY_RULES = PROMPTS["system"]
 SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
 
@@ -113,17 +115,25 @@ SYNTHESIS_PROMPT_TEMPLATE = PROMPTS["retrieval_template"]
 def _connect_weaviate():
     if not WEAVIATE_URL:
         raise RuntimeError("Set [weaviate].url in secrets.")
+
     auth = Auth.api_key(WEAVIATE_API_KEY) if WEAVIATE_API_KEY else None
+
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=WEAVIATE_URL,
         auth_credentials=auth,
-        additional_config=AdditionalConfig(timeout=Timeout(init=30, query=60, insert=120)),
+        additional_config=AdditionalConfig(
+            timeout=Timeout(init=30, query=60, insert=120)
+        ),
     )
+
+    # quick check: collection must exist (use() is the idiomatic v4 call)
     try:
         _ = client.collections.use(COLLECTION_NAME)
     except Exception as e:
         raise RuntimeError(f"Collection '{COLLECTION_NAME}' not found or client unreachable: {e}")
+
     return client
+
 
 @st.cache_resource(show_spinner=False)
 def _load_embed_model(name: str) -> SentenceTransformer:
@@ -140,74 +150,57 @@ def _load_reranker():
 
 RERANKER = _load_reranker()
 
-# ========= Local App-State Context (lets agent answer about “my data/forecast”) =========
+# ============= Introspective schema helpers (v4 Collections) =============
 
-def _fmt_int(n): 
-    try: return f"{int(n):,}"
-    except: return str(n)
+def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
+    """
+    Pick the main text field and an optional source/url-like field.
 
-def _brief_df(df: pd.DataFrame, name: str) -> str:
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return f"{name}: none"
-    rows, cols = df.shape
-    head_cols = ", ".join([str(c) for c in list(df.columns)[:8]]) + ("…" if df.shape[1] > 8 else "")
-    return f"{name}: shape=({_fmt_int(rows)}×{_fmt_int(cols)}); columns=[{head_cols}]"
+    • You can force the property names via Streamlit secrets:
+        [weaviate]
+        text_property   = "content"      # REQUIRED if your schema doesn't use 'text'
+        source_property = "source_path"  # OPTIONAL
 
-def _local_context() -> Dict[str, Any]:
-    s = st.session_state
-    ctx = {}
+    • If not forced, we fall back to schema introspection + heuristics.
+    """
+    # --- secrets-based override (preferred if set) ---
+    forced_text = _sget("weaviate", "text_property", None)
+    forced_src  = _sget("weaviate", "source_property", None)
+    if forced_text:
+        return forced_text, forced_src
 
-    # Uploaded data & choices
-    df = s.get("uploaded_df")
-    ctx["uploaded_df"] = _brief_df(df, "uploaded_df")
-    ctx["source_name"] = s.get("source_name")
-    ctx["date_col"]    = s.get("date_col")
-    ctx["target_col"]  = s.get("target_col")
-    ctx["resample"]    = s.get("resample_freq")
-    ctx["transform"]   = s.get("target_transform")
-    ctx["seasonal_m"]  = s.get("seasonal_m")
-    ctx["fill_method"] = s.get("fill_method")
+    # --- heuristic fallback via schema inspection ---
+    text_field: Optional[str] = None
+    source_field: Optional[str] = None
+    try:
+        coll = client.collections.get(class_name)
+        cfg = coll.config.get()
+        props = getattr(cfg, "properties", []) or []
+        names = [getattr(p, "name", "") for p in props]
 
-    # Cleaning stats
-    ctx["raw_rows"]    = s.get("raw_rows")
-    ctx["raw_cols"]    = s.get("raw_cols")
-    ctx["clean_rows"]  = s.get("clean_rows")
-    ctx["clean_cols"]  = s.get("clean_cols")
-    ctx["drop_breakdown"] = s.get("drop_breakdown")
+        # likely content fields
+        for cand in ["text", "content", "body", "chunk", "passage", "document", "value"]:
+            if cand in names:
+                text_field = cand
+                break
 
-    # CV / metrics
-    ctx["cv_folds"]    = s.get("cv_folds")
-    ctx["cv_horizon"]  = s.get("cv_horizon")
-    ctx["cv_gap"]      = s.get("cv_gap")
-    ctx["cv_metrics"]  = s.get("cv_metrics")
+        if not text_field:
+            for p in props:
+                dts = [str(dt).lower() for dt in (getattr(p, "data_type", []) or [])]
+                if any("text" in dt for dt in dts):
+                    text_field = getattr(p, "name", None)
+                    if text_field:
+                        break
 
-    # Model selections
-    for k in ["sel_ARMA","sel_ARIMA","sel_ARIMAX","sel_SARIMA","sel_SARIMAX",
-              "sel_AutoARIMA","sel_HWES","sel_Prophet","sel_TBATS","sel_XGB","sel_LGBM","sel_TFT"]:
-        ctx[k] = s.get(k)
+        # likely source/url fields
+        for cand in ["source", "url", "page", "path", "file", "document", "uri", "source_path"]:
+            if cand in names:
+                source_field = cand
+                break
+    except Exception:
+        pass
 
-    # Optional results (if your pipeline stores them)
-    # e.g., 'forecast_df', 'cv_leaderboard', 'best_model_name', 'residuals_df'
-    for k in ["forecast_df", "cv_leaderboard", "best_model_name", "residuals_df", "resample_summary"]:
-        if isinstance(s.get(k), pd.DataFrame):
-            ctx[k] = _brief_df(s.get(k), k)
-        else:
-            ctx[k] = s.get(k)
-
-    return ctx
-
-def _summarize_local_context(ctx: Dict[str, Any], max_lines: int = 20) -> str:
-    items = []
-    add = lambda k, v: items.append(f"- {k}: {v}") if v not in [None, "", {}] else None
-    for k in ["uploaded_df","source_name","date_col","target_col","resample",
-              "transform","seasonal_m","fill_method","raw_rows","raw_cols",
-              "clean_rows","clean_cols","drop_breakdown","cv_folds","cv_horizon",
-              "cv_gap","cv_metrics","best_model_name","forecast_df","cv_leaderboard",
-              "residuals_df","resample_summary"]:
-        add(k, ctx.get(k))
-    if len(items) > max_lines:
-        items = items[:max_lines] + ["- …"]
-    return "\n".join(items)
+    return (text_field or "text", source_field)
 
 # ============================ Retrieval (v4) ============================
 
@@ -224,6 +217,7 @@ def _best_extract_sentences(question: str, texts: List[str], max_pick: int = 6) 
         scored.append((base, len(s), s))
     scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
     picked = [s for sc, ln, s in scored if sc > 0] or [s for sc, ln, s in scored]
+    # clean + dedupe
     seen, out = set(), []
     for s in picked:
         ss = re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", s)).strip()
@@ -272,79 +266,79 @@ def _collect_from_objects(objs, text_field: str, source_field: Optional[str]) ->
         out.append({"text": text_val, "source": src_val, "score": score_val})
     return out
 
-def _pick_text_and_source_fields(client: Any, class_name: str) -> Tuple[str, Optional[str]]:
-    if TEXT_PROP_OVERRIDE:
-        return TEXT_PROP_OVERRIDE, SRC_PROP_OVERRIDE
-    try:
-        coll = client.collections.get(class_name)
-        cfg = coll.config.get()
-        props = getattr(cfg, "properties", []) or []
-        names = [getattr(p, "name", "") for p in props]
-        text_field = None
-        for cand in ["text","content","body","chunk","passage","document","value"]:
-            if cand in names: text_field = cand; break
-        if not text_field:
-            for p in props:
-                dts = [str(dt).lower() for dt in (getattr(p, "data_type", []) or [])]
-                if any("text" in dt for dt in dts):
-                    text_field = getattr(p, "name", None); break
-        source_field = None
-        for cand in ["source","url","page","path","file","document","uri","source_path"]:
-            if cand in names: source_field = cand; break
-        return (text_field or "text", source_field)
-    except Exception:
-        return ("text", None)
-
 def _search_weaviate(client: Any, class_name: str, text_field: str, source_field: Optional[str],
                      embedder: SentenceTransformer, query: str, k: int) -> List[Dict[str,Any]]:
+    """
+    v4 flow: near-vector → hybrid → bm25
+    """
     want = max(k, 24)
     coll = client.collections.get(class_name)
-    qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32").tolist()
+
+    # Prepare query vector
+    qv = embedder.encode([query], normalize_embeddings=True)[0].astype("float32")
+    qv_list = qv.tolist()
 
     # 1) near-vector
     try:
-        res = coll.query.near_vector(near_vector=qv, limit=want,
-                                     return_metadata=wvc.query.MetadataQuery(distance=True))
+        res = coll.query.near_vector(
+            near_vector=qv_list,
+            limit=want,
+            return_metadata=wvc.query.MetadataQuery(distance=True)
+        )
         hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits: return hits
-    except Exception: pass
+        if hits:
+            return hits
+    except Exception:
+        pass
 
-    # 2) hybrid
+    # 2) hybrid (vector + keyword)
     try:
-        res = coll.query.hybrid(query=query, vector=qv, alpha=0.6, limit=want,
-                                return_metadata=wvc.query.MetadataQuery(score=True))
+        res = coll.query.hybrid(
+            query=query,
+            vector=qv_list,
+            alpha=0.6,
+            limit=want,
+            return_metadata=wvc.query.MetadataQuery(score=True)
+        )
         hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits: return hits
-    except Exception: pass
+        if hits:
+            return hits
+    except Exception:
+        pass
 
-    # 3) bm25
+    # 3) bm25 fallback
     try:
-        res = coll.query.bm25(query=query, limit=want,
-                              return_metadata=wvc.query.MetadataQuery(score=True))
+        res = coll.query.bm25(
+            query=query,
+            limit=want,
+            return_metadata=wvc.query.MetadataQuery(score=True)
+        )
         hits = _collect_from_objects(res.objects, text_field, source_field)
-        if hits: return hits
-    except Exception: pass
+        if hits:
+            return hits
+    except Exception:
+        pass
 
     return []
 
-def retrieve(client: Any, class_name: str, query: str, k: int) -> List[Dict[str,Any]]:
+def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[Dict[str,Any]]:
     model = _load_embed_model(EMB_MODEL_NAME)
     text_field, source_field = _pick_text_and_source_fields(client, class_name)
     prelim = _search_weaviate(client, class_name, text_field, source_field, model, query, k)
     prelim = [x for x in prelim if x.get("text")]
     if not prelim:
         return []
-    # diversity
+    # simple diversity: cap near-duplicates
     uniq, seen = [], set()
     for c in prelim:
-        key = re.sub(r"\W+", "", c["text"].lower())[:300]
+        key = re.sub(r"\W+", "", c["text"].lower())[:280]
         if key not in seen:
             seen.add(key); uniq.append(c)
     return _apply_reranker(query, uniq, k)
 
 # ============================ LLM Synthesis & Query Rewrite ============================
 
-def _anthropic_answer(question: str, kb_blocks: List[str], local_block: str) -> Optional[str]:
+def _anthropic_answer(question: str, context_blocks: List[str]) -> Optional[str]:
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key:
         return None
@@ -354,26 +348,28 @@ def _anthropic_answer(question: str, kb_blocks: List[str], local_block: str) -> 
         return None
     prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
         question=question,
-        kb="\n".join(f"- {c}" for c in kb_blocks) if kb_blocks else "(none)",
-        local=local_block or "(none)",
+        ctx="\n".join(f"- {c}" for c in context_blocks)
     )
     try:
         client = _anthropic.Anthropic(api_key=key)
         msg = client.messages.create(
             model=os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
             system=PROMPTS["system"],
-            max_tokens=700,
+            max_tokens=500,
             temperature=0.0,
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join([b.text for b in msg.content if getattr(b, "type", "") == "text"]).strip()
-        if not text or text.lower().strip().replace(".", "") == "insufficient context":
+        if not text:
+            return None
+        if text.lower().strip().replace(".", "") == "insufficient context":
             return None
         return text
     except Exception:
         return None
 
 def _rewrite_query(orig_question: str) -> str:
+    """Use Claude to rewrite the query into a precise Forecast360/TS context; fallback to original."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key or not orig_question.strip():
         return orig_question
@@ -392,33 +388,7 @@ def _rewrite_query(orig_question: str) -> str:
     except Exception:
         return orig_question
 
-# ============================ Router ============================
-
-_LOCAL_HINTS = [
-    r"\b(my|uploaded|current)\s+(data|dataset|file|csv|excel|json|parquet|xml)\b",
-    r"\b(my|current)\s+(forecast|predictions?|results?)\b",
-    r"\b(columns?|date(_|\s*)col|target(_|\s*)col|resampl|transform|mape|rmse|mae|smape|mase|metrics?)\b",
-    r"\b(model|algorithm)s?\b.*\b(selected|enabled|used)\b",
-]
-
-def _needs_local_context(q: str) -> bool:
-    ql = q.lower()
-    if any(re.search(pat, ql) for pat in _LOCAL_HINTS):
-        return True
-    # short heuristic: if user asks “what is my …”
-    if re.search(r"\b(my|our)\b.*\b(data|forecast|metric|model)\b", ql):
-        return True
-    return False
-
-# ============================ Agent Core ============================
-
-def _format_answer(text: str, sources: List[str]) -> str:
-    # sources pretty list
-    srcs = [s for s in sources if s]
-    if srcs:
-        src_block = "\n".join(f"- {s}" for s in srcs[:8])
-        return f"{text}\n\n**Sources**\n{src_block}"
-    return text
+# ============================ Agent ============================
 
 class Forecast360Agent:
     def __init__(self, client: Any, class_name: str):
@@ -427,70 +397,51 @@ class Forecast360Agent:
         if "messages" not in st.session_state:
             st.session_state["messages"] = []
 
-    def _answer(self, user_q: str, *, top_k: int, max_sents: int, use_local: bool) -> str:
-        # 1) rewrite for domain
+    def _answer(self, user_q: str) -> str:
+        # 1) Query rewrite (domain-focused)
         q_precise = _rewrite_query(user_q)
 
-        # 2) gather contexts
-        kb_hits: List[Dict[str,Any]] = retrieve(self.client, self.class_name, q_precise, top_k)
-        kb_texts = [h["text"] for h in kb_hits]
-        kb_sources = [h.get("source","") for h in kb_hits]
+        # 2) Retrieve
+        hits = retrieve(self.client, self.class_name, q_precise, TOP_K)
+        if not hits:
+            return ("We couldn’t find that detail in the Forecast360 knowledge base. "
+                    "Please rephrase or ask about a different topic.")
+        texts = [h["text"] for h in hits]
+        excerpts = _best_extract_sentences(q_precise, texts, max_pick=6) or texts[:6]
 
-        local_ctx = _local_context() if use_local or _needs_local_context(q_precise) else {}
-        local_block = _summarize_local_context(local_ctx) if local_ctx else ""
-
-        if not kb_texts and not local_ctx:
-            return "Insufficient Context."
-
-        # 3) sentence selection for answerability
-        excerpts = _best_extract_sentences(q_precise, kb_texts, max_pick=max_sents) if kb_texts else []
-
-        # 4) LLM grounded synthesis
-        llm_ans = _anthropic_answer(q_precise, excerpts, local_block)
+        # 3) LLM Synthesis (strictly grounded)
+        llm_ans = _anthropic_answer(q_precise, excerpts)
         if llm_ans:
-            return _format_answer(llm_ans, kb_sources)
+            return llm_ans
 
-        # 5) Fallback extractive summary
-        parts = []
-        if excerpts:
-            parts.append("**From the knowledge base:**")
-            parts += [f"- {ex}" for ex in excerpts]
-        if local_block:
-            parts.append("\n**From your current session:**")
-            for line in local_block.splitlines():
-                parts.append(line)
-        if not parts:
-            return "Insufficient Context."
-        return _format_answer("\n".join(parts), kb_sources)
+        # 4) Fallback extractive summary
+        parts = ["Here’s what we can confirm from our knowledge base:"]
+        parts += [f"- {ex}" for ex in excerpts]
+        return "\n".join(parts)
 
-    def respond(self, user_q: str, *, top_k: int, max_sents: int, use_local: bool) -> str:
+    def respond(self, user_q: str) -> str:
         ql = user_q.strip().lower()
         if re.fullmatch(r"(hi|hello|hey|greetings|good (morning|afternoon|evening))[\W_]*", ql or ""):
-            return ("Hello! I’m the Forecast360 AI Agent. Ask me about models, pipelines, metrics, forecasts, "
-                    "or your currently uploaded data. I’ll answer using the knowledge base and your session context.")
-
+            return ("Hello! I am Forecast360 AI Agent. Ask me about forecasting models, pipelines, dashboards, "
+                    "accuracy metrics, or Azure integrations — we’ll answer using our knowledge base.")
         try:
-            return self._answer(user_q, top_k=top_k, max_sents=max_sents, use_local=use_local)
+            return self._answer(user_q)
         except Exception:
             return ("Sorry, something went wrong while processing your request. "
                     "Please try again in a moment.")
 
-# ============================ Streamlit UI ============================
+# ============================ Streamlit UI (same look & feel) ============================
 
 def _render_agent_core(set_config: bool = False):
+    # If embedding inside a parent app (tabs), we should NOT call set_page_config again.
     if set_config:
-        st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="centered")
+        st.set_page_config(
+            page_title=PAGE_TITLE,   # Text shown in browser tab
+            page_icon=PAGE_ICON,     # Icon shown in tab (can be emoji or image path)
+            layout="centered"        # Page layout style: "centered" or "wide"
+        )
 
-    # Admin knobs
-    with st.sidebar:
-        st.subheader("🔧 Agent Settings")
-        top_k = st.number_input("Top-K (KB results)", min_value=3, max_value=30, value=TOP_K_DEFAULT, step=1)
-        max_sents = st.number_input("Max sentences (KB extract)", min_value=3, max_value=15, value=MAX_SENTS_DEFAULT, step=1)
-        use_local = st.checkbox("Use Local Session Context", value=True,
-                                help="When on, the agent can answer about your uploaded data, chosen columns, forecasts, and metrics.")
-        st.caption("These settings affect only the AI Agent responses.")
-
-    # Style
+    
     st.markdown("""
     <style>
     .stButton>button { border-radius: 10px; border-color: #007bff; color: #007bff; }
@@ -502,25 +453,43 @@ def _render_agent_core(set_config: bool = False):
     .bottom-actions { margin-top: 6px; }
     </style>
     """, unsafe_allow_html=True)
-
+    
     # Header
     c1, c2 = st.columns([1, 8], vertical_alignment="center")
     with c1: st.image(ASSISTANT_ICON, width=80)
     with c2:
         st.markdown("### Forecast360 AI Agent")
-
-    # KB Refresh
+        st.markdown('<span>Created by Amitesh Jha | iSoft</span>', unsafe_allow_html=True)
+    
+    # --- KB Refresh (Azure Blob -> Weaviate) ---
     with st.container():
         st.markdown("""
         <style>
-        .kb-row { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; }
-        .kb-caption { font-size: 0.9rem; color: var(--text-color-secondary,#6b6f76); white-space: nowrap; }
-        .kb-refresh-btn button { width: 26px; height: 26px; min-width: 26px; min-height: 26px; padding: 0; border-radius: 6px; font-size: 14px; line-height: 1; }
+        .kb-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .kb-caption {
+            font-size: 0.9rem;
+            color: var(--text-color-secondary,#6b6f76);
+            white-space: nowrap;
+        }
+        .kb-refresh-btn button {
+            width: 26px; height: 26px;
+            min-width: 26px; min-height: 26px;
+            padding: 0; border-radius: 6px;
+            font-size: 14px; line-height: 1;
+        }
         </style>
         <div class="kb-row">
-          <span class="kb-caption">Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)</span>
+          <span class="kb-caption">
+            Knowledge Base: Weaviate ← Azure Blob (refresh to re-sync latest files)
+          </span>
           <span class="kb-refresh-btn">""", unsafe_allow_html=True)
-
+    
+        # The button itself
         if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
             with st.spinner("Refreshing knowledge base…"):
                 try:
@@ -543,10 +512,11 @@ def _render_agent_core(set_config: bool = False):
                     st.toast("Knowledge base refreshed.")
                 except Exception as e:
                     st.error(f"KB refresh failed: {e}")
-
+    
+        # close the flex container
         st.markdown("</span></div>", unsafe_allow_html=True)
 
-    # Connect Weaviate
+    # --- Weaviate Connection and Agent Setup ---
     if "f360_client" not in st.session_state:
         with st.spinner("Connecting to the Forecast360 knowledge base…"):
             try:
@@ -554,23 +524,23 @@ def _render_agent_core(set_config: bool = False):
             except Exception as e:
                 st.error(f"⚠️ Weaviate configuration error: {e}")
                 st.stop()
-
+    
     agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
-
-    # Initial bot message
+    
+    # Initial assistant message (only once)
     if not st.session_state["messages"]:
         st.session_state["messages"].append({
             "role":"assistant",
-            "content":"Hello! I'm your Forecast360 AI Agent. Ask about models, CV metrics, pipelines, or your currently uploaded data/forecast."
+            "content":"Hello! I’m your Forecast360 AI Agent. How can I help today?"
         })
-
-    # History
+    
+    # Render chat history
     for m in st.session_state["messages"]:
         avatar = ASSISTANT_ICON if m["role"]=="assistant" else (USER_ICON if os.path.exists(USER_ICON) else "👤")
         with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
-
-    # Pending queued query (optional)
+    
+    # Process queued query (if any)
     if "pending_query" in st.session_state:
         pq = st.session_state.pop("pending_query")
         st.session_state["messages"].append({"role":"user","content":pq})
@@ -579,13 +549,13 @@ def _render_agent_core(set_config: bool = False):
         with st.chat_message("assistant", avatar=ASSISTANT_ICON):
             loading_msg = random.choice(PROMPTS["loading"])
             with st.spinner(loading_msg):
-                reply = agent.respond(pq, top_k=top_k, max_sents=max_sents, use_local=use_local)
+                reply = agent.respond(pq)
             st.markdown(reply)
         st.session_state["messages"].append({"role":"assistant","content":reply})
         st.rerun()
-
+    
     # Chat input
-    user_q = st.chat_input("Ask me anything about Forecast360 or your current session…", key="chat_box")
+    user_q = st.chat_input("Ask me...", key="chat_box")
     if user_q:
         st.session_state["messages"].append({"role":"user","content":user_q})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
@@ -593,7 +563,7 @@ def _render_agent_core(set_config: bool = False):
         with st.chat_message("assistant", avatar=ASSISTANT_ICON):
             loading_msg = random.choice(PROMPTS["loading"])
             with st.spinner(loading_msg):
-                reply = agent.respond(user_q, top_k=top_k, max_sents=max_sents, use_local=use_local)
+                reply = agent.respond(user_q)
             st.markdown(reply)
         st.session_state["messages"].append({"role":"assistant","content":reply})
         st.rerun()
@@ -602,9 +572,10 @@ def _render_agent_core(set_config: bool = False):
 def render_agent():
     _render_agent_core(set_config=False)
 
-# Standalone runner
+# Standalone runner (useful for `streamlit run agent.py`)
 def run():
     _render_agent_core(set_config=True)
 
+# allow “python agent.py”
 if __name__ == "__main__":
     run()
