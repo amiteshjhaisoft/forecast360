@@ -1,6 +1,5 @@
 # Author: Amitesh Jha | iSOFT
 
-# gs.py
 # ---- Standard Library
 import os
 import io
@@ -22,9 +21,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
 
-
 from kb_capture import KBCapture, kb_set_block
 from kb_sync_azure import sync_folder_to_blob
+
+# AI Agent
+from forecast360_chat import run as run_ai_agent
 
 # Patch once so ALL renders/uploads are captured
 if "kb" not in st.session_state:
@@ -303,8 +304,6 @@ install_unified_tooltips()     # widget tooltips
 install_content_tooltips()     # title/header/subheader + md() helper
 # ======================= /end Forecast360 — Unified Tooltips =======================
 
-
-
 def render_kb_footer():
     """
     Hardcoded KB footer (no button):
@@ -340,7 +339,6 @@ def render_kb_footer():
     st.session_state["_kb_last_sig"] = sig
     st.success(f"Snapshot saved to: {out_dir}")
 
-#------------------------------------------------------------------------------------------------------------------------------------------------
 # --- Render the CTA button ONLY if sidebar not shown yet ---
 if not st.session_state.get("show_sidebar", False):
 
@@ -373,13 +371,11 @@ if not st.session_state.get("show_sidebar", False):
         if st.button("Let's Start Time Series Data Forecasting", key="start_btn"):
             st.session_state["show_sidebar"] = True
         st.markdown("</div>", unsafe_allow_html=True)
-#-----------------------------------------------------------------------------------------------------------------------------------
-
-
 # ------ Sidebar Code -----
+
 ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
 
-def render_sidebar() -> None:
+def sidebar_getting_started():
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
     with st.sidebar:
         # ---- Branding --------------------------------------------------------
@@ -388,6 +384,20 @@ def render_sidebar() -> None:
 
         st.subheader("🚀 Getting Started")
 
+        # # ---- Data Upload -----------------------------------------------------
+        # st.header("📂 Data Upload")
+        # up = st.file_uploader(
+        #     "Upload CSV / Excel / JSON / Parquet / XML",
+        #     type=ACCEPTED_EXTS,
+        #     accept_multiple_files=False,
+        #     key="gs_file",
+        # )
+        # xml_xpath = st.text_input(
+        #     "XML row path (optional XPath)",
+        #     value=st.session_state.get("xml_xpath", ""),
+        #     help="e.g., .//row  or  .//record  or  .//item",
+        #     key="xml_xpath",
+        # )
         # ---- Data Upload -----------------------------------------------------
         st.header("📂 Data Upload")
         up = st.file_uploader(
@@ -416,6 +426,37 @@ def render_sidebar() -> None:
 
         st.divider()
         st.markdown("**🔎 Column detection — Automatic**")
+
+        # # ---- Read uploaded file ---------------------------------------------
+        # _data, source_name = None, None
+        # if up is not None:
+        #     try:
+        #         if "cached_read" in globals() and callable(globals().get("cached_read")):
+        #             _data = cached_read(up.getvalue(), up.name, xml_xpath=xml_xpath)
+        #         else:
+        #             ext = Path(up.name).suffix.lower()
+        #             raw = up.getvalue()
+        #             if ext == ".csv":
+        #                 _data = pd.read_csv(io.StringIO(raw.decode("utf-8", "ignore")))
+        #             elif ext in {".xlsx", ".xls"}:
+        #                 _data = pd.read_excel(up)
+        #             elif ext == ".json":
+        #                 _data = pd.read_json(io.BytesIO(raw))
+        #             elif ext == ".parquet":
+        #                 _data = pd.read_parquet(io.BytesIO(raw))
+        #             elif ext == ".xml":
+        #                 try:
+        #                     _data = pd.read_xml(io.BytesIO(raw), xpath=xml_xpath or ".//row")
+        #                 except Exception:
+        #                     _data = pd.read_xml(io.BytesIO(raw))
+        #             else:
+        #                 st.warning(f"Unsupported extension: {ext}")
+        #                 _data = None
+        #         source_name = up.name
+        #         st.session_state["raw_rows"], st.session_state["raw_cols"] = int(_data.shape[0]), int(_data.shape[1])
+        #     except Exception as e:
+        #         st.error(f"Failed to read file: {e}")
+        #         _data, source_name = None, None
 
         # ---- Read uploaded file ---------------------------------------------
         _data, source_name = None, None
@@ -734,7 +775,8 @@ def render_sidebar() -> None:
         st.divider()
 
 # ------ Sidebar Code End -----  
-def render() -> None:
+
+def page_getting_started():
     """
     Full Getting Started page:
       - Summary, Preview, Profile, Boxplot-by-Category, Correlation
@@ -2457,13 +2499,12 @@ def render() -> None:
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# sidebar_getting_started page_getting_started
 # Public API for embedding inside your tabbed app
 def run() -> None:
     """Standalone runner for `streamlit run gs.py` (includes page config & sidebar)."""
     st.set_page_config(page_title="Getting Started", page_icon="🚀", layout="centered")
-    render()
-    render_sidebar()
-
+    page_getting_started()
 
 # allow “python gs.py”
 if __name__ == "__main__":
