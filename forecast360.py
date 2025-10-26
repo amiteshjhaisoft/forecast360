@@ -2,17 +2,18 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-# --- Page config (call once, at top) ---
+from pathlib import Path
+from PIL import Image
+import streamlit as st
+
+ICON_PATH = Path("assets/forecast360.png")
+page_icon = Image.open(ICON_PATH) if ICON_PATH.is_file() else "📈"
+
 st.set_page_config(
-    icon_path = Path("assets/forecast360.png")
-    page_icon = Image.open(icon_path) if icon_path.is_file() else "📈"
-
-    st.set_page_config(
-        page_title="Forecast360",
-        page_icon=page_icon,
-        layout="wide",
-    )
-
+    page_title="Forecast360",
+    page_icon=page_icon,
+    layout="wide",
+)
 # Ensure the flag exists (used by GS CTA + JS visibility)
 st.session_state.setdefault("show_sidebar", False)
 
