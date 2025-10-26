@@ -29,6 +29,41 @@ if "kb" not in st.session_state:
     st.session_state.kb = KBCapture(folder_name="KB").patch()  # <- no keep_last
 kb = st.session_state.kb
 
+def render_kb_footer():
+    """
+    Hardcoded KB footer (no button):
+    - Enforces folder=KB, keep_last=3, ai_summary=True
+    - Auto-flushes once per render *only if new items were captured*
+    """
+    kb = st.session_state.get("kb")
+    if kb is None:
+        st.warning("KB capture is not initialized.")
+        return
+
+    # Enforce constants (hard lock)
+    kb.folder_name = "KB"
+    kb.keep_last   = 30 # <- fixed
+
+    st.markdown("### 📦 Knowledge Base Snapshot")
+    st.caption("Auto-saving this page’s captured uploads, tables, and plots…")
+
+    # only flush if something new appeared since last flush
+    items = getattr(kb, "_items", [])
+    if not items:
+        st.info("Nothing to save yet.")
+        return
+
+    last_ts = items[-1].ts if hasattr(items[-1], "ts") else ""
+    sig = f"{len(items)}::{last_ts}"
+
+    if st.session_state.get("_kb_last_sig") == sig:
+        st.caption("No changes since last snapshot.")
+        return
+
+    out_dir = kb.flush(ai_summary=True)
+    st.session_state["_kb_last_sig"] = sig
+    st.success(f"Snapshot saved to: {out_dir}")
+
 # Init the sidebar-flow flag once per session (used by CTA + sidebar gating)
 st.session_state.setdefault("show_sidebar", False)
 
