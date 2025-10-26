@@ -699,7 +699,7 @@ def render_sidebar() -> None:
         st.divider()
 
 # ------ Sidebar Code End -----  
-def page_render() -> None:
+def render() -> None:
     """
     Full Getting Started page:
       - Summary, Preview, Profile, Boxplot-by-Category, Correlation
@@ -2428,7 +2428,6 @@ def render_getting_started():
 
 # Standalone runner (useful for `streamlit run gs.py`)
 def run():
-    st.set_page_config(page_title="Getting Started", page_icon="🚀", layout="centered")
     render()
     render_sidebar()
 
