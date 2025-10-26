@@ -737,6 +737,1408 @@ def page_getting_started():
                 slot.dataframe(dfd.head(new_val), use_container_width=True, height=table_h)
             st.markdown("</div>", unsafe_allow_html=True)
 
+# ========================= Row 2: Profile | Boxplot =========================
+    st.divider()
+    c3, c4 = st.columns([0.40, 0.60], gap="large")
+    with c3:
+        st.markdown('<div class="block-card"><h4>📊 Data Profile — Column Statistics</h4>', unsafe_allow_html=True)
+        with st.expander("Show profile", expanded=True): 
+            #  st.markdown('<div class="block-card"><h4>Column statistics</h4>', unsafe_allow_html=True) 
+             _st_df(prof, hide_index=True, use_container_width=True) 
+             st.markdown("</div>", unsafe_allow_html=True)
+
+
+    with c4:
+        # st.subheader("📈 Profile Plots (Boxplot)")
+        st.markdown('<div class="block-card"><h4>📈 Profile Plots (Boxplot)</h4>', unsafe_allow_html=True)
+        num_cols = list(dfd.select_dtypes(include=["number"]).columns)
+        cat_cols = list(dfd.select_dtypes(exclude=["number", "datetime", "datetimetz", "timedelta"]).columns)
+        if not num_cols or not cat_cols:
+            st.info("Need at least one numeric and one categorical column.")
+        else:
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            with cc1: num_col = st.selectbox("Numeric",  num_cols, key="gs_prof_box_num")
+            with cc2: cat_col = st.selectbox("Category", cat_cols, key="gs_prof_box_cat")
+            with cc3:
+                palette_name = st.selectbox(
+                    "Palette",
+                    ["tab20", "Set3", "Pastel1", "Dark2", "Accent", "viridis", "plasma", "coolwarm"],
+                    index=0, key="gs_prof_box_palette",
+                )
+            with cc4:
+                sort_by = st.selectbox("Sort", ["frequency", "median", "mean", "label"], index=0, key="gs_prof_box_sort")
+
+            tmp = dfd[[cat_col, num_col]].copy()
+            tmp["__cat__"] = tmp[cat_col].astype("object")
+            tmp = tmp.dropna(subset=["__cat__", num_col])
+
+            if tmp.empty:
+                st.info("Not enough data to draw the boxplot.")
+            else:
+                freq = tmp["__cat__"].value_counts()
+                top_keys = freq.head(10).index
+                top_df = tmp[tmp["__cat__"].isin(top_keys)]
+                stats = (top_df.groupby("__cat__")[num_col]
+                         .agg(count="size", mean="mean", median="median")
+                         .reset_index())
+
+                if sort_by == "frequency":
+                    stats = stats.sort_values("count", ascending=False)
+                elif sort_by == "median":
+                    stats = stats.sort_values("median", ascending=False)
+                elif sort_by == "mean":
+                    stats = stats.sort_values("mean", ascending=False)
+                else:
+                    stats["__label_str__"] = stats["__cat__"].astype(str)
+                    stats = stats.sort_values("__label_str__").drop(columns="__label_str__")
+
+                labels = stats["__cat__"].tolist()
+                grouped = {k: v[num_col].to_numpy() for k, v in top_df.groupby("__cat__")}
+                data = [grouped[k] for k in labels if k in grouped and len(grouped[k]) > 0]
+
+                if not data:
+                    st.info("Not enough data to draw the boxplot.")
+                else:
+                    cmap = plt.get_cmap(palette_name)
+                    n = len(data)
+                    colors = [cmap(i / max(n - 1, 1)) for i in range(n)]
+                    fig_w = max(8.2, 6.8 + 0.25 * n)
+
+                    fig, ax = plt.subplots(figsize=(fig_w, 4.6), dpi=100)
+                    bp = ax.boxplot(
+                        data, patch_artist=True, labels=[str(x) for x in labels],
+                        showmeans=True, meanline=False, widths=0.6, whis=1.5,
+                    )
+                    import matplotlib.colors as mcolors
+                    for box, col in zip(bp["boxes"], colors):
+                        box.set_facecolor(col); box.set_alpha(0.6)
+                        edge = tuple(np.clip(np.array(mcolors.to_rgb(col)) * 0.55, 0, 1))
+                        box.set_edgecolor(edge); box.set_linewidth(1.4)
+                    for whisk in bp["whiskers"]: whisk.set_color("#666"); whisk.set_linewidth(1.0)
+                    for cap   in bp["caps"]:     cap.set_color("#666"); cap.set_linewidth(1.0)
+                    for med   in bp["medians"]:  med.set_color("#1f2a44"); med.set_linewidth(1.6)
+                    for mean  in bp["means"]:
+                        mean.set_marker("o"); mean.set_markerfacecolor("white")
+                        mean.set_markeredgecolor("#1f2a44"); mean.set_markersize(5)
+
+                    # jitter raw points
+                    rng = np.random.default_rng(7)
+                    for i, vals in enumerate(data, start=1):
+                        if len(vals) == 0: continue
+                        x = rng.normal(i, 0.06, size=len(vals))
+                        ax.scatter(x, vals, s=12, c=[colors[i - 1]], alpha=0.35,
+                                   edgecolors="white", linewidths=0.3, zorder=2)
+
+                    ax.set_title(f"{num_col} by {cat_col} (top {len(labels)})", pad=10)
+                    ax.set_ylabel(num_col)
+                    ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
+                    for tick in ax.get_xticklabels():
+                        tick.set_rotation(15); tick.set_ha("right")
+                    fig.tight_layout()
+                    # st.markdown('<div class="block-card"><h4>Boxplot</h4>', unsafe_allow_html=True)
+                    st.pyplot(fig, clear_figure=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ========================= Correlation (table + heatmap) =========================
+    st.divider()
+    # st.subheader("🧩 Correlation")
+    st.markdown('<div class="block-card"><h4>🧩 Correlation</h4>', unsafe_allow_html=True)
+    num_df = dfd.select_dtypes(include="number")
+    if num_df.shape[1] < 2:
+        st.info("Need at least two numeric columns to compute correlations.")
+        return
+
+    cc1, cc2, cc3 = st.columns([0.28, 0.30, 0.42])
+    with cc1:
+        method = st.selectbox("Method", ["pearson", "spearman", "kendall"], index=0, key="corr_method")
+    with cc2:
+        show_heat = st.checkbox("Show heatmap", value=True, key="corr_show_heatmap")
+    with cc3:
+        cols = st.multiselect("Columns (optional subset)",
+                              list(num_df.columns),
+                              default=list(num_df.columns),
+                              key="corr_columns")
+
+    if len(cols) < 2:
+        st.warning("Please select at least two columns.")
+        return
+
+    corr = num_df[cols].corr(method=method)
+    lhs, rhs = st.columns([0.48, 0.52], gap="large")
+    with lhs:
+        st.markdown('<div class="block-card"><h4>Correlation Matrix</h4>', unsafe_allow_html=True)
+        _st_df(corr.round(3), use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with rhs:
+        st.markdown('<div class="block-card"><h4>Correlation Heatmap</h4>', unsafe_allow_html=True)
+        if show_heat:
+            fig, ax = plt.subplots(figsize=(7.6, 6.0), dpi=120)
+            im = ax.imshow(corr.values, vmin=-1, vmax=1, aspect="equal")
+            ax.set_xticks(range(len(cols))); ax.set_xticklabels(cols, rotation=45, ha="right")
+            ax.set_yticks(range(len(cols))); ax.set_yticklabels(cols)
+            ax.set_title(f"Heatmap ({method})")
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04); cbar.ax.set_ylabel("corr", rotation=90, va="center")
+            for i in range(len(cols)):
+                for j in range(len(cols)):
+                    ax.text(j, i, f"{corr.values[i, j]:.2f}", ha="center", va="center")
+            fig.tight_layout()
+            st.pyplot(fig, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ========================= Preparation & Validation =========================
+    st.divider()
+    # st.markdown("## ✅ Preparation & Validation")
+    st.markdown('<div class="block-card"><h4>✅ Preparation & Validation</h4>', unsafe_allow_html=True)
+
+    # Choose date/target columns
+    date_col = st.session_state.get("date_col")
+    target_col = st.session_state.get("target_col")
+    if (date_col is None) or (date_col not in dfd.columns):
+        dt_like = [c for c in dfd.columns if pd.api.types.is_datetime64_any_dtype(dfd[c])]
+        if dt_like:
+            date_col = dt_like[0]
+        else:
+            name_hits = [c for c in dfd.columns if str(c).lower() in ("date","datetime","timestamp","time")]
+            date_col = name_hits[0] if name_hits else dfd.columns[0]
+        st.session_state["date_col"] = date_col
+
+    if (target_col is None) or (target_col not in dfd.columns):
+        num_cols = [c for c in dfd.columns if pd.api.types.is_numeric_dtype(dfd[c])]
+        target_col = num_cols[0] if num_cols else dfd.columns[-1]
+        st.session_state["target_col"] = target_col
+
+    # Build time series
+    ts = dfd[[date_col, target_col]].copy()
+    ts[date_col] = pd.to_datetime(ts[date_col], errors="coerce")
+    ts = ts.dropna(subset=[date_col]).sort_values(date_col).drop_duplicates(subset=[date_col], keep="last")
+    ts = ts.set_index(date_col)
+    ts = _dedupe_index(ts, 'last')
+
+    inferred = pd.infer_freq(ts.index)
+    eff_freq = st.session_state.get("resample_freq", "W")
+    eff_freq = None if eff_freq == "raw" else eff_freq
+    if eff_freq is None and inferred:
+        eff_freq = inferred
+    if eff_freq:
+        ts = ts.resample(eff_freq).sum(numeric_only=True)
+
+    y = ts[target_col].astype(float).copy()
+
+    # Missing value policy
+    mv_policy = (st.session_state.get("missing_values", "median") or "median").lower()
+    if mv_policy == "ffill": y = y.ffill()
+    elif mv_policy == "bfill": y = y.bfill()
+    elif mv_policy == "zero": y = y.fillna(0.0)
+    elif mv_policy == "mean": y = y.fillna(y.mean())
+    elif mv_policy == "median": y = y.fillna(y.median())
+    elif mv_policy == "mode":
+        try: y = y.fillna(y.mode().iloc[0])
+        except Exception: y = y.fillna(y.median())
+    elif mv_policy == "interpolate_linear": y = y.interpolate(method="linear")
+    elif mv_policy == "interpolate_time":
+        try: y = y.interpolate(method="time")
+        except Exception: y = y.interpolate(method="linear")
+    elif mv_policy == "constant":
+        y = y.fillna(float(st.session_state.get("const_missing_value", 0.0)))
+    elif mv_policy == "drop":
+        y = y.dropna()
+
+    # Transform
+    transform = (st.session_state.get("target_transform", "none") or "none").lower()
+    transformer = ("none",)
+    if transform == "log1p":
+        y_tr = np.log1p(np.clip(y, a_min=0, a_max=None))
+        transformer = ("log1p",)
+    elif transform == "boxcox":
+        try:
+            from scipy.stats import boxcox
+            shift = max(1e-6, -(y.min()) + 1e-6)
+            y_bc, lam = boxcox((y + shift).values)
+            y_tr = pd.Series(y_bc, index=y.index)
+            transformer = ("boxcox", lam, shift)
+        except Exception:
+            y_tr = np.log1p(np.clip(y, a_min=0, a_max=None))
+            transformer = ("log1p",)
+    else:
+        y_tr = y.copy()
+
+    # Build exogenous X with calendar + user columns + lags + scaling
+    def _guess_m(freq_code: str | None) -> int:
+        if not freq_code: return 7
+        code = str(freq_code).upper()[0]
+        return {"D":7, "W":52, "M":12, "Q":4, "H":24}.get(code, 7)
+    m = _guess_m(eff_freq or inferred)
+
+    def _detect_pattern(yser: pd.Series) -> str:
+        if yser.dropna().shape[0] < 10: return "additive"
+        roll = yser.rolling(window=max(5, len(yser)//20))
+        corr = roll.std().corr(yser)
+        return "multiplicative" if (corr is not None and corr > 0.3) else "additive"
+
+    pattern_ui = st.session_state.get("pattern_type", "Auto-detect")
+    pattern = pattern_ui if pattern_ui != "Auto-detect" else _detect_pattern(y)
+
+    # Parse exog
+    def _parse_exog(txt: str):
+        txt = (txt or "").strip()
+        if not txt: return []
+        try:
+            if txt.startswith("["): return [s.strip() for s in json.loads(txt)]
+        except Exception:
+            pass
+        return [t.strip() for t in txt.split(",") if t.strip()]
+
+    exog_cols = list(dict.fromkeys(
+        _parse_exog(st.session_state.get("exog_cols_text", "")) +
+        list(st.session_state.get("exog_additional_cols", []))
+    ))
+
+    # Base matrix
+    X = pd.DataFrame(index=y_tr.index)
+    if st.session_state.get("use_calendar_exog", True):
+        idx = y_tr.index
+        X["dow"] = idx.dayofweek
+        X["month"] = idx.month
+        X["is_month_start"] = idx.is_month_start.astype(int)
+        X["is_month_end"] = idx.is_month_end.astype(int)
+        X["is_weekend"] = idx.dayofweek.isin([5,6]).astype(int)
+
+    for c in exog_cols:
+        if c in dfd.columns:
+            s = dfd.set_index(pd.to_datetime(dfd[date_col], errors="coerce"))[c]
+            X[c] = pd.to_numeric(_safe_align_series_to_index(s, y_tr.index), errors="coerce")
+
+    # Lags
+    lag_list = st.session_state.get("exog_lags", [0,1,7])
+    try:
+        lag_list = sorted(set(int(l) for l in lag_list if int(l) >= 0))
+    except Exception:
+        lag_list = [0,1,7]
+    lagged = {}
+    for c in list(X.columns):
+        for L in lag_list:
+            if L == 0: continue
+            lagged[f"{c}_lag{L}"] = X[c].shift(L)
+    if lagged:
+        X = pd.concat([X, pd.DataFrame(lagged)], axis=1)
+
+    if st.session_state.get("scale_exog", True) and not X.empty:
+        X = (X - X.mean()) / X.std(ddof=0)
+    X = _dedupe_index(X, 'last').reindex(y_tr.index)
+
+    # --------- Prep tables/plots ---------
+    PLOT_W, PLOT_H = 8.8, 3.0
+    L1, R1 = st.columns([0.5, 0.5], gap="large")
+    with L1:
+        # === L1: Preparation summary ===================================================
+        st.markdown('<div class="block-card"><h4>Preparation Summary</h4>', unsafe_allow_html=True)
+        
+        # Duplicate timestamps: prefer 'ts' if present; fall back to 'y'
+        try:
+            dup_ts = int(ts.index.duplicated().sum())  # if 'ts' exists
+        except Exception:
+            dup_ts = int(y.index.duplicated().sum())
+
+        prep_df = pd.DataFrame(
+            [
+                ("Inferred frequency",                 inferred or "—"),
+                ("Effective frequency",                eff_freq or "raw"),
+                ("Index monotonic ↑",                  bool(y.index.is_monotonic_increasing)),
+                ("Duplicate timestamps",               dup_ts),
+                ("Pattern",                            str(pattern)),
+                ("Seasonal period guess (m)",          (int(m) if m is not None else "—")),
+                ("Missing values (prepared series)",   int(y.isna().sum())),
+            ],
+            columns=["Metric", "Value"],
+        )
+
+        _renderer = globals().get("_st_df")
+        if callable(_renderer):
+            _renderer(prep_df, use_container_width=True, hide_index=True)
+        else:
+            st.dataframe(prep_df, use_container_width=True, hide_index=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # === L1: Descriptive stats =====================================================
+        st.markdown(f'<div class="block-card"><h4>Descriptive Statistics · {target_col}</h4>', unsafe_allow_html=True,)
+
+        stats = (
+            y.describe(percentiles=[0.10, 0.25, 0.50, 0.75, 0.90])
+            .to_frame("value")
+            .reset_index(names="stat")
+        )
+
+        if callable(_renderer):
+            _renderer(stats, use_container_width=True, hide_index=True)
+        else:
+            st.dataframe(stats, use_container_width=True, hide_index=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+    with R1:
+        # === EDA section wrapper (L1) ============================================
+        # st.markdown('<div class="eda-section"><h1>Exploratory Data Analysis</h1>', unsafe_allow_html=True)
+        st.markdown('<div class="block-card"><h4>Exploratory Data Analysis</h4>', unsafe_allow_html=True,)
+
+        # 1) Line — target over time
+        st.markdown(f'<div class="block-card"><h4>{target_col} Over Time</h4>', unsafe_allow_html=True,)
+        fig1, ax1 = plt.subplots(figsize=(PLOT_W, PLOT_H))
+        ax1.plot(y.index, y.values, lw=1.8, marker="o", markersize=2.5, alpha=0.95)
+        ax1.set_title(f"{target_col} Over Time")  # optional; we already show an H4 above
+        st.pyplot(fig1, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # 2) Histogram — distribution
+        st.markdown(
+            f'<div class="block-card"><h4>Distribution of {target_col}</h4>',
+            unsafe_allow_html=True,
+        )
+        fig2, ax2 = plt.subplots(figsize=(PLOT_W, 2.6))
+        ax2.hist(y.dropna().values, bins=30, edgecolor="white", linewidth=0.6)
+        ax2.set_ylabel("Count")
+        ax2.set_title(f"Distribution of {target_col}")  # optional; H4 is above
+        st.pyplot(fig2, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # 3) Rolling KPIs — mean & volatility
+        st.markdown('<div class="block-card"><h4>Rolling mean &amp; volatility</h4>', unsafe_allow_html=True,)
+
+        # Safe window sizes from seasonal period guess `m` (fallbacks if m is None/0)
+        try:
+            m_safe = int(m) if m is not None else 12
+        except Exception:
+            m_safe = 12
+        r_short = max(3, (m_safe // 4) or 5)
+        r_long  = max(7, (m_safe // 2) or 15)
+
+        roll_mean_s = y.rolling(r_short).mean()
+        roll_mean_l = y.rolling(r_long).mean()
+        roll_std    = y.rolling(r_long).std()
+
+        fig3, ax3 = plt.subplots(figsize=(PLOT_W, 2.6))
+        ax3.plot(roll_mean_s.index, roll_mean_s.values, lw=1.4, label=f"Mean ({r_short})")
+        ax3.plot(roll_mean_l.index, roll_mean_l.values, lw=1.6, label=f"Mean ({r_long})")
+        ax3.fill_between(
+            roll_std.index,
+            (roll_mean_l - roll_std).values,
+            (roll_mean_l + roll_std).values,
+            alpha=0.15,
+            label=f"±1σ ({r_long})",
+        )
+        ax3.legend(loc="upper left", frameon=False)
+        ax3.set_title("Rolling mean & volatility")  # optional; H4 is above
+        st.pyplot(fig3, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Close EDA section wrapper
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+    # ========================= Seasonality & Decomposition =========================
+    st.divider()
+    # st.markdown("## 🌊 Seasonality & Decomposition")
+    st.markdown('<div class="block-card"><h4>🌊 Seasonality & Decomposition</h4>', unsafe_allow_html=True,)
+    L2, R2 = st.columns([0.5, 0.5], gap="large")
+
+    if HAVE_STATSM and y.dropna().shape[0] >= max(2*m, 20):
+        stl = STL(y.dropna(), period=max(m,1)).fit()
+
+        with L2:
+            # st.markdown("#### Component summaries")
+            st.markdown('<div class="block-card"><h4>Component Summaries</h4>', unsafe_allow_html=True,)
+            comp_df = pd.DataFrame(
+                {"mean":[stl.observed.mean(), stl.trend.mean(), stl.seasonal.mean(), stl.resid.mean()],
+                 "std": [stl.observed.std(),  stl.trend.std(),  stl.seasonal.std(),  stl.resid.std()]},
+                index=["Observed","Trend","Seasonal","Resid"]
+            ).reset_index(names="component")
+            # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+            _st_df(comp_df, use_container_width=True, hide_index=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # st.markdown("#### Seasonality diagnostics")
+            st.markdown('<div class="block-card"><h4>Seasonality diagnostics</h4>', unsafe_allow_html=True,)
+            var = np.nanvar
+            tr, se, re = stl.trend.dropna().values, stl.seasonal.dropna().values, stl.resid.dropna().values
+            n = min(len(tr), len(se), len(re)); tr, se, re = tr[-n:], se[-n:], re[-n:]
+            Ft = max(0.0, 1 - var(re)/max(var(tr + re), 1e-12))
+            Fs = max(0.0, 1 - var(re)/max(var(se + re), 1e-12))
+            vs, vt, vr = var(se), var(tr), var(re); denom = (vs + vt + vr) or np.nan
+            p = lambda x: "–" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:,.1f}%"
+            diag_df = pd.DataFrame({
+                "metric": ["Seasonal strength (Fs)", "Trend strength (Ft)",
+                           "Variance share · Seasonal", "Variance share · Trend", "Variance share · Residual"],
+                "value":  [p(Fs), p(Ft), p(vs/denom if denom else np.nan),
+                           p(vt/denom if denom else np.nan), p(vr/denom if denom else np.nan)]
+            })
+            # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+            _st_df(diag_df, use_container_width=True, hide_index=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # st.markdown("#### Autocorrelation & tests")
+            # st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
+            y_clean = pd.Series(y).dropna().values
+            nlags = int(min(len(y_clean)//2, max(60, 2*m)))
+            ac = _acf(y_clean, nlags=nlags, fft=True)
+            peaks = [(lag, val) for lag, val in enumerate(ac) if lag > 0]
+            peaks.sort(key=lambda t: t[1], reverse=True)
+            top_peaks = peaks[:3]
+            colA, colB = st.columns([0.55, 0.45])
+
+            with colA:
+                # Build the small table of top ACF lags safely
+                if top_peaks:
+                    df_top = pd.DataFrame({
+                        "top lag": [p[0] for p in top_peaks],
+                        "ACF":     [round(p[1], 3) for p in top_peaks],
+                    })
+                else:
+                    df_top = pd.DataFrame({"top lag": ["–"], "ACF": ["–"]})
+
+                st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True,)
+                _st_df(df_top, use_container_width=True, hide_index=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with colB:
+                try:
+                    adf_p = adfuller(y_clean, autolag="AIC")[1]
+                except Exception:
+                    adf_p = np.nan
+
+                lags = [m] if m else [10]
+                try:
+                    lb_p = float(_ljung(y_clean, lags=lags, return_df=True)["lb_pvalue"].iloc[0])
+                except Exception:
+                    lb_p = np.nan
+
+                st.markdown('<div class="block-card"><h4>Tests</h4>', unsafe_allow_html=True,)
+                _st_df(
+                    pd.DataFrame(
+                        [
+                            ("ADF stationarity p", round(adf_p, 4) if not np.isnan(adf_p) else "—"),
+                            (f"Ljung–Box p @ m={m or 10}", round(lb_p, 4) if not np.isnan(lb_p) else "—"),
+                        ],
+                        columns=["test", "p-value"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+
+        with R2:
+            # Seasonal–Trend decomposition
+            st.markdown('<div class="block-card"><h4>Seasonal–Trend Decomposition</h4>', unsafe_allow_html=True)
+            # --- Plot STL components (Observed, Trend, Seasonal, Resid) -------------------
+            fig, axes = plt.subplots(4, 1, figsize=(8.8, 5.8), sharex=True)
+            cols = [0.20, 0.40, 0.60, 0.80]
+            for ax, s, t, c in zip(
+                axes,
+                [stl.observed, stl.trend, stl.seasonal, stl.resid],
+                ["Observed", "Trend", "Seasonal", "Resid"],
+                cols,
+            ):
+                ax.plot(s, lw=1.8, color=plt.get_cmap("viridis")(c))
+                ax.set_title(t)
+                ax.grid(alpha=0.5)
+            fig.tight_layout()
+
+            st.pyplot(fig, clear_figure=True)
+            st.markdown("</div>", unsafe_allow_html=True)  # close block-card
+
+            # --- ACF bars -----------------------------------------------------------------
+            st.markdown('<div class="block-card"><h4>Autocorrelation (bars)</h4>', unsafe_allow_html=True)
+            max_show = min(nlags, 48)
+            figc, axc = plt.subplots(figsize=(8.8, 2.6))
+            axc.bar(range(1, max_show + 1), ac[1 : max_show + 1], edgecolor="white", linewidth=0.4)
+            axc.set_title(f"ACF (first {max_show} lags)")
+            st.pyplot(figc, clear_figure=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+    else:
+        st.info("Not enough points or library unavailable for STL decomposition — need at least ~2 seasonal cycles.")
+
+    # ========================= Rolling CV & Leaderboard =========================
+    st.divider()
+    # st.markdown("## 🏆 Leaderboard (Rolling Cross Validation)")
+    st.markdown('<div class="block-card"><h4>🏆 Leaderboard (Rolling Cross Validation) - Leaderboard</h4>', unsafe_allow_html=True,)
+
+    cfg = {
+        "metrics": st.session_state.get("cv_metrics", ["RMSE","MAE","MASE","MAPE","sMAPE"]),
+        "folds": int(st.session_state.get("cv_folds", 3)),
+        "h":     int(st.session_state.get("cv_horizon", 12)),
+        "gap":   int(st.session_state.get("cv_gap", 0)),
+        # Model on/off toggles
+        "models": {
+            "ARMA": st.session_state.get("sel_ARMA", True),
+            "ARIMA": st.session_state.get("sel_ARIMA", True),
+            "ARIMAX": st.session_state.get("sel_ARIMAX", False),
+            "SARIMA": st.session_state.get("sel_SARIMA", False),
+            "SARIMAX": st.session_state.get("sel_SARIMAX", False),
+            "Auto_ARIMA": st.session_state.get("sel_AutoARIMA", False),
+            "HWES": st.session_state.get("sel_HWES", False),
+            "Prophet": st.session_state.get("sel_Prophet", False),
+            "TBATS": st.session_state.get("sel_TBATS", False),
+            "XGBoost": st.session_state.get("sel_XGB", False),
+            "LightGBM": st.session_state.get("sel_LGBM", False),
+            "TFT": st.session_state.get("sel_TFT", False),
+        },
+        # Params (read but also have safety defaults inside)
+        "arma": dict(p=st.session_state.get("arma_p",1), q=st.session_state.get("arma_q",1), trend=st.session_state.get("arma_trend","c")),
+        "arima": dict(p=st.session_state.get("arima_p",1), d=st.session_state.get("arima_d",1), q=st.session_state.get("arima_q",1), trend=st.session_state.get("arima_trend","c")),
+        "sarima": dict(p=st.session_state.get("sarima_p",1), d=st.session_state.get("sarima_d",0), q=st.session_state.get("sarima_q",1),
+                       P=st.session_state.get("sarima_P",1), D=st.session_state.get("sarima_D",0), Q=st.session_state.get("sarima_Q",1),
+                       m=st.session_state.get("sarima_m","auto"), trend=st.session_state.get("sarima_trend","c")),
+        "arimax": dict(p=st.session_state.get("arimax_p",1), d=st.session_state.get("arimax_d",1), q=st.session_state.get("arimax_q",1), trend=st.session_state.get("arimax_trend","c")),
+        "sarimax": dict(p=st.session_state.get("sarimax_p",1), d=st.session_state.get("sarimax_d",0), q=st.session_state.get("sarimax_q",1),
+                        P=st.session_state.get("sarimax_P",1), D=st.session_state.get("sarimax_D",0), Q=st.session_state.get("sarimax_Q",1),
+                        m=st.session_state.get("sarimax_m","auto"), trend=st.session_state.get("sarimax_trend","c")),
+        "auto_arima": dict(
+            seasonal=st.session_state.get("auto_seasonal", True),
+            m=st.session_state.get("auto_m", "auto"),
+            stepwise=st.session_state.get("auto_stepwise", True),
+            suppress_warnings=st.session_state.get("auto_suppress_warnings", True),
+            max_p=st.session_state.get("auto_max_p", 5),
+            max_q=st.session_state.get("auto_max_q", 5),
+            max_P=st.session_state.get("auto_max_P", 2),
+            max_Q=st.session_state.get("auto_max_Q", 2),
+            max_d=st.session_state.get("auto_max_d", 2),
+            max_D=st.session_state.get("auto_max_D", 1),
+        ),
+        "hwes": dict(
+            trend=st.session_state.get("hwes_trend", None),
+            seasonal=st.session_state.get("hwes_seasonal", None),
+            seasonal_periods=st.session_state.get("hwes_sp", "auto"),
+            damped_trend=st.session_state.get("hwes_damped", False),
+            use_boxcox=st.session_state.get("hwes_boxcox", False),
+        ),
+        "prophet": dict(
+            growth=st.session_state.get("prophet_growth", "linear"),
+            changepoint_prior_scale=st.session_state.get("prophet_cps", 0.05),
+            seasonality_mode=st.session_state.get("prophet_seasonality_mode", "additive"),
+            weekly_seasonality=st.session_state.get("prophet_weekly", True),
+            yearly_seasonality=st.session_state.get("prophet_yearly", True),
+            daily_seasonality=st.session_state.get("prophet_daily", False),
+        ),
+        "tbats": dict(
+            seasonal_periods=st.session_state.get("tbats_sp", "[7, 365.25]"),
+            use_arma_errors=st.session_state.get("tbats_use_arma", True),
+            use_box_cox=st.session_state.get("tbats_boxcox", False),
+        ),
+        "xgboost": dict(
+            n_estimators=st.session_state.get("xgb_estimators", 500),
+            max_depth=st.session_state.get("xgb_depth", 5),
+            learning_rate=st.session_state.get("xgb_lr", 0.05),
+            subsample=st.session_state.get("xgb_subsample", 0.8),
+            colsample_bytree=st.session_state.get("xgb_colsample", 0.8),
+            reg_alpha=st.session_state.get("xgb_alpha", 0.1),
+            reg_lambda=st.session_state.get("xgb_lambda", 1.0),
+        ),
+        "lightgbm": dict(
+            n_estimators=st.session_state.get("lgbm_estimators", 400),
+            learning_rate=st.session_state.get("lgbm_lr", 0.05),
+            subsample=st.session_state.get("lgbm_subsample", 0.8),
+            colsample_bytree=st.session_state.get("lgbm_colsample", 0.8),
+            random_state=st.session_state.get("lgbm_random_state", 42),
+        ),
+        "tft": dict(
+            input_chunk_length=st.session_state.get("tft_in_len", None),
+            output_chunk_length=st.session_state.get("tft_out_len", None),
+            hidden_size=st.session_state.get("tft_hidden", 16),
+            n_epochs=st.session_state.get("tft_epochs", 50),
+            batch_size=st.session_state.get("tft_batch", 32),
+            random_state=st.session_state.get("tft_seed", 42),
+        ),
+    }
+
+    METRIC_FUNS = {"RMSE": rmse, "MAE": mae, "MASE": lambda a,b: mase(a,b, season=(m if m>1 else 1)), "MAPE": mape, "sMAPE": smape}
+    primary_metric = cfg["metrics"][0] if cfg["metrics"] else "RMSE"
+
+    # CV split prep
+    y_cv = y_tr.dropna()
+    X_cv = X.loc[y_cv.index] if not X.empty else pd.DataFrame(index=y_cv.index)
+    n, H, G = len(y_cv), max(1, cfg["h"]), max(0, cfg["gap"])
+    folds = max(2, cfg["folds"])
+    min_train = max(2*m + 10, 20)
+    max_folds = max(1, (n - (H + G) - min_train) // H + 1)
+    folds = min(folds, max_folds)
+    if folds < 2:
+        st.warning("Not enough data for the requested CV setup; reducing to a single evaluation.")
+        folds = 1
+
+    def _is_nonempty_2d(X):
+        return isinstance(X, pd.DataFrame) and (not X.empty) and X.shape[0] > 0 and X.shape[1] > 0
+    def _clean_numeric_df(X: pd.DataFrame) -> pd.DataFrame:
+        X = X.copy()
+        for c in X.columns:
+            if not pd.api.types.is_numeric_dtype(X[c]):
+                X[c] = pd.to_numeric(X[c], errors="coerce")
+        X.replace([np.inf, -np.inf], np.nan, inplace=True)
+        return X
+
+    # Statsmodels exog cleaning
+    def _sanitize_Xy_for_statsmodels(y_in: pd.Series, X_in: pd.DataFrame | None):
+        if X_in is None or getattr(X_in, "empty", True):
+            yy = pd.to_numeric(y_in, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            return yy, None
+        Xc = X_in.copy()
+        Xc = _dedupe_index(Xc, 'last').reindex(y_in.index)
+        for c in Xc.columns:
+            if not pd.api.types.is_numeric_dtype(Xc[c]):
+                Xc[c] = pd.to_numeric(Xc[c], errors="coerce")
+        Xc.replace([np.inf, -np.inf], np.nan, inplace=True)
+        policy = mv_policy
+        if policy in ("ffill", "forward_fill"): Xc = Xc.ffill()
+        elif policy in ("bfill", "backfill"):   Xc = Xc.bfill()
+        elif policy == "mean":   Xc = Xc.apply(lambda s: s.fillna(s.mean()))
+        elif policy == "median": Xc = Xc.apply(lambda s: s.fillna(s.median()))
+        elif policy in ("const","constant"): Xc = Xc.fillna(float(st.session_state.get("const_missing_value", 0.0)))
+        if not Xc.empty:
+            Xc = Xc.loc[:, Xc.notna().any(axis=0)]
+            nunique = Xc.nunique(dropna=True) if not Xc.empty else pd.Series(dtype=int)
+            keep = [c for c in Xc.columns if int(nunique.get(c, 2)) > 1]
+            Xc = Xc[keep] if keep else pd.DataFrame(index=Xc.index)
+        both = pd.concat([pd.to_numeric(y_in, errors="coerce"), Xc], axis=1)
+        both.replace([np.inf, -np.inf], np.nan, inplace=True)
+        both = both.dropna()
+        y_out = both.iloc[:, 0]
+        X_out = both.iloc[:, 1:]
+        if X_out.empty:
+            X_out = None
+        return y_out, X_out
+
+    def _sanitize_future_exog_for_statsmodels(Xf: pd.DataFrame | None, train_cols: list[str] | None = None):
+        if Xf is None or getattr(Xf, "empty", True):
+            return None
+        Xf = Xf.copy()
+        for c in Xf.columns:
+            if not pd.api.types.is_numeric_dtype(Xf[c]):
+                Xf[c] = pd.to_numeric(Xf[c], errors="coerce")
+        Xf.replace([np.inf, -np.inf], np.nan, inplace=True)
+        policy = mv_policy
+        if policy in ("ffill", "forward_fill"): Xf = Xf.ffill()
+        elif policy in ("bfill", "backfill"):   Xf = Xf.bfill()
+        elif policy == "mean":   Xf = Xf.apply(lambda s: s.fillna(s.mean()))
+        elif policy == "median": Xf = Xf.apply(lambda s: s.fillna(s.median()))
+        elif policy in ("const","constant"): Xf = Xf.fillna(float(st.session_state.get("const_missing_value", 0.0)))
+        if train_cols is not None:
+            Xf = Xf.reindex(columns=list(train_cols), fill_value=np.nan)
+            if policy in ("ffill", "forward_fill"): Xf = Xf.ffill().bfill()
+            elif policy in ("bfill", "backfill"):   Xf = Xf.bfill().ffill()
+            elif policy == "mean":   Xf = Xf.apply(lambda s: s.fillna(s.mean()))
+            elif policy == "median": Xf = Xf.apply(lambda s: s.fillna(s.median()))
+            elif policy in ("const","constant"): Xf = Xf.fillna(float(st.session_state.get("const_missing_value", 0.0)))
+            Xf = Xf.fillna(0.0)
+        return Xf
+
+    # Fit/Predict for each model
+    def _params_for(name: str) -> dict:
+        return cfg.get(name.lower().replace("-", "_"), {})
+
+    def _make_tree_features(y_trn: pd.Series, X_trn: pd.DataFrame | None):
+        base = pd.DataFrame({"y": y_trn.values}, index=y_trn.index)
+        base["lag1"] = base["y"].shift(1)
+        base["lag7"] = base["y"].shift(min(7, max(1, m)))
+        base["lag_m"] = base["y"].shift(max(1, m))
+        feat = base[["lag1","lag7","lag_m"]]
+        if X_trn is not None and not X_trn.empty:
+            feat = feat.join(X_trn, how="left")
+        feat = feat.dropna()
+        yy = base.loc[feat.index, "y"]
+        return feat, yy
+
+    def _recursive_forecast_tree(model, last_y: np.ndarray, X_hist: pd.DataFrame | None,
+                                 X_fut: pd.DataFrame | None, steps: int) -> np.ndarray:
+        out = []
+        y_hist = pd.Series(last_y, index=y_tr.index[-len(last_y):])
+        for t in range(steps):
+            row = {
+                "lag1": (out[-1] if out else y_hist.iloc[-1]),
+                "lag7": (out[-min(7, len(out))] if len(out) >= 7 else y_hist.iloc[-min(7, len(y_hist))]),
+                "lag_m": (out[-min(m, len(out))] if len(out) >= m else y_hist.iloc[-min(m, len(y_hist))]),
+            }
+            ex = (X_fut.iloc[[t]].to_dict("records")[0] if (X_fut is not None and len(X_fut) > t) else {})
+            row.update(ex)
+            Xrow = pd.DataFrame([row])
+            out.append(float(model.predict(Xrow)[0]))
+        return np.array(out, dtype=float)
+
+    def _fit_predict(model_name: str,
+                     y_train: pd.Series,
+                     X_train: pd.DataFrame | None,
+                     steps: int,
+                     X_future: pd.DataFrame | None):
+        # Statsmodels family
+        if model_name == "ARMA":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            p, q = cfg["arma"]["p"], cfg["arma"]["q"]; trend = cfg["arma"]["trend"]
+            mod = SARIMAX(y_train, order=(p, 0, q), trend=trend,
+                          enforce_stationarity=False, enforce_invertibility=False)
+            res = mod.fit(disp=False)
+            fc = res.forecast(steps=steps)
+            return np.asarray(fc), res
+
+        if model_name == "ARIMA":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            p, d, q = cfg["arima"]["p"], cfg["arima"]["d"], cfg["arima"]["q"]; trend = cfg["arima"]["trend"]
+            mod = SARIMAX(y_train, order=(p, d, q), trend=trend,
+                          enforce_stationarity=False, enforce_invertibility=False)
+            res = mod.fit(disp=False)
+            fc = res.forecast(steps=steps)
+            return np.asarray(fc), res
+
+        if model_name == "ARIMAX":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            p, d, q = cfg["arimax"]["p"], cfg["arimax"]["d"], cfg["arimax"]["q"]; trend = cfg["arimax"]["trend"]
+            y_trn, X_trn = _sanitize_Xy_for_statsmodels(y_train, X_train)
+            train_cols = list(X_trn.columns) if X_trn is not None else None
+            Xf = _sanitize_future_exog_for_statsmodels(X_future, train_cols=train_cols)
+            if X_trn is None or Xf is None:
+                mod = SARIMAX(y_trn, order=(p, d, q), trend=trend, enforce_stationarity=False, enforce_invertibility=False)
+                res = mod.fit(disp=False); fc = res.forecast(steps=steps)
+            else:
+                mod = SARIMAX(y_trn, exog=X_trn, order=(p, d, q), trend=trend, enforce_stationality=False, enforce_invertibility=False)
+                res = mod.fit(disp=False); fc = res.forecast(steps=steps, exog=Xf)
+            return np.asarray(fc), res
+
+        if model_name == "SARIMA":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            P, D, Q = cfg["sarima"]["P"], cfg["sarima"]["D"], cfg["sarima"]["Q"]
+            p, d, q = cfg["sarima"]["p"], cfg["sarima"]["d"], cfg["sarima"]["q"]
+            mm = m if str(cfg["sarima"]["m"]).lower() == "auto" else int(float(cfg["sarima"]["m"]))
+            trend = cfg["sarima"]["trend"]
+            mod = SARIMAX(y_train, order=(p, d, q),
+                          seasonal_order=(P, D, Q, max(1, mm)), trend=trend,
+                          enforce_stationarity=False, enforce_invertibility=False)
+            res = mod.fit(disp=False)
+            fc = res.forecast(steps=steps)
+            return np.asarray(fc), res
+
+        if model_name == "SARIMAX":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            P, D, Q = cfg["sarimax"]["P"], cfg["sarimax"]["D"], cfg["sarimax"]["Q"]
+            p, d, q = cfg["sarimax"]["p"], cfg["sarimax"]["d"], cfg["sarimax"]["q"]
+            mm = m if str(cfg["sarimax"]["m"]).lower() == "auto" else int(float(cfg["sarimax"]["m"]))
+            y_trn, X_trn = _sanitize_Xy_for_statsmodels(y_train, X_train)
+            train_cols = list(X_trn.columns) if X_trn is not None else None
+            Xf = _sanitize_future_exog_for_statsmodels(X_future, train_cols=train_cols)
+            if X_trn is None or Xf is None:
+                mod = SARIMAX(y_trn, order=(p, d, q), seasonal_order=(P, D, Q, max(1, mm)),
+                              enforce_stationarity=False, enforce_invertibility=False)
+                res = mod.fit(disp=False); fc = res.forecast(steps=steps)
+            else:
+                mod = SARIMAX(y_trn, exog=X_trn, order=(p, d, q), seasonal_order=(P, D, Q, max(1, mm)),
+                              enforce_stationarity=False, enforce_invertibility=False)
+                res = mod.fit(disp=False); fc = res.forecast(steps=steps, exog=Xf)
+            return np.asarray(fc), res
+
+        if model_name == "Auto_ARIMA":
+            if not HAVE_PM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["auto_arima"]
+            seasonal = bool(pars.get("seasonal", m > 1))
+            mm = m if str(pars.get("m", "auto")).lower() == "auto" else int(float(pars["m"]))
+            y_trn, X_trn = _sanitize_Xy_for_statsmodels(y_train, X_train)
+            train_cols = list(X_trn.columns) if X_trn is not None else None
+            Xf = _sanitize_future_exog_for_statsmodels(X_future, train_cols=train_cols)
+            if X_trn is None or Xf is None:
+                ar = pmd.auto_arima(y_trn, seasonal=seasonal, m=max(1, mm),
+                                    stepwise=pars.get("stepwise", True),
+                                    suppress_warnings=pars.get("suppress_warnings", True),
+                                    max_p=pars.get("max_p", 5), max_q=pars.get("max_q", 5),
+                                    max_P=pars.get("max_P", 2), max_Q=pars.get("max_Q", 2),
+                                    max_d=pars.get("max_d", 2), max_D=pars.get("max_D", 1))
+                fc = ar.predict(n_periods=steps)
+            else:
+                ar = pmd.auto_arima(y_trn, X=X_trn, seasonal=seasonal, m=max(1, mm),
+                                    stepwise=pars.get("stepwise", True),
+                                    suppress_warnings=pars.get("suppress_warnings", True),
+                                    max_p=pars.get("max_p", 5), max_q=pars.get("max_q", 5),
+                                    max_P=pars.get("max_P", 2), max_Q=pars.get("max_Q", 2),
+                                    max_d=pars.get("max_d", 2), max_D=pars.get("max_D", 1))
+                fc = ar.predict(n_periods=steps, X=Xf)
+            return np.asarray(fc), ar
+
+        if model_name == "HWES":
+            if not HAVE_STATSM:
+                return np.repeat(y_train.iloc[-1], steps), None
+            # pattern controls add/mul
+            tkw = {"add": "add", "mul": "mul"}["add" if pattern == "additive" else "mul"]
+            sp = st.session_state.get("hwes_sp", "auto")
+            if isinstance(sp, str) and sp.strip().lower() in ("auto", "m"):
+                sp = m
+            try:
+                sp = int(float(sp))
+            except Exception:
+                sp = m
+            mod = ExponentialSmoothing(y_train, trend=tkw,
+                                       seasonal=(tkw if sp > 1 else None),
+                                       seasonal_periods=max(1, sp))
+            res = mod.fit()
+            fc = res.forecast(steps)
+            return np.asarray(fc), res
+
+        if model_name == "Prophet":
+            if not (HAVE_PROPHET and cfg["models"].get("Prophet", False)):
+                return np.repeat(y_train.iloc[-1], steps), None
+            dfp = pd.DataFrame({"ds": pd.to_datetime(y_train.index), "y": y_train.values}).dropna()
+            if len(dfp) < 2:
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["prophet"]
+            mprop = Prophet(
+                growth=pars.get("growth","linear"),
+                changepoint_prior_scale=pars.get("changepoint_prior_scale",0.05),
+                seasonality_mode=pars.get("seasonality_mode","additive"),
+                weekly_seasonality=pars.get("weekly_seasonality",True),
+                yearly_seasonality=pars.get("yearly_seasonality",True),
+                daily_seasonality=pars.get("daily_seasonality",False),
+            )
+            mprop.fit(dfp)
+            freq_str = (y_train.index.freqstr
+                        if getattr(y_train.index, "freqstr", None)
+                        else (pd.infer_freq(y_train.index) or (eff_freq or "W")))
+            future = pd.DataFrame({"ds": pd.date_range(dfp["ds"].iloc[-1], periods=steps, freq=freq_str, inclusive="right")})
+            fc = mprop.predict(future)["yhat"].values
+            return np.asarray(fc), mprop
+
+        if model_name == "TBATS":
+            if not (HAVE_TBATS and cfg["models"].get("TBATS", False)):
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["tbats"]
+            try:
+                sp = json.loads(pars.get("seasonal_periods", "[7, 365.25]"))
+            except Exception:
+                sp = [max(1, m)]
+            estimator = TBATS(
+                seasonal_periods=sp,
+                use_arma_errors=pars.get("use_arma_errors", True),
+                use_box_cox=pars.get("use_box_cox", False),
+            )
+            res = estimator.fit(y_train.values)
+            fc = res.forecast(steps=steps)
+            return np.asarray(fc), res
+
+        if model_name == "XGBoost":
+            if not (HAVE_XGB and cfg["models"].get("XGBoost", False)):
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["xgboost"]
+            Xtr, yy = _make_tree_features(y_train, X_train)
+            if len(yy) == 0 or Xtr.empty:
+                return np.repeat(y_train.iloc[-1], steps), None
+            model = xgb.XGBRegressor(
+                n_estimators=pars["n_estimators"], max_depth=pars["max_depth"],
+                learning_rate=pars["learning_rate"], subsample=pars["subsample"],
+                colsample_bytree=pars["colsample_bytree"], reg_alpha=pars["reg_alpha"],
+                reg_lambda=pars["reg_lambda"], tree_method="hist"
+            )
+            model.fit(Xtr, yy)
+            Xf = X_future.copy() if (X_future is not None and not X_future.empty) else pd.DataFrame(index=range(steps))
+            # Align to training cols
+            Xf = _clean_numeric_df(Xf.reindex(columns=list(Xtr.columns), fill_value=np.nan)).fillna(0.0)
+            return _recursive_forecast_tree(model, y_train.values, Xtr, Xf, steps), model
+
+        if model_name == "LightGBM":
+            if not (HAVE_LGBM and cfg["models"].get("LightGBM", False)):
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["lightgbm"]
+            Xtr, yy = _make_tree_features(y_train, X_train)
+            if len(yy) == 0 or Xtr.empty:
+                return np.repeat(y_train.iloc[-1], steps), None
+            Xtr = _clean_numeric_df(Xtr).dropna()
+            yy  = pd.to_numeric(yy, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            both = Xtr.join(yy.rename("y"), how="inner")
+            if both.empty or both.shape[1] == 1:
+                return np.repeat(y_train.iloc[-1], steps), None
+            yy  = both.pop("y"); Xtr = both
+            if not _is_nonempty_2d(Xtr) or len(yy) == 0:
+                return np.repeat(y_train.iloc[-1], steps), None
+            model = lgb.LGBMRegressor(
+                n_estimators=pars["n_estimators"], learning_rate=pars["learning_rate"],
+                subsample=pars["subsample"], colsample_bytree=pars["colsample_bytree"],
+                random_state=pars["random_state"],
+            )
+            model.fit(Xtr, yy)
+            Xf = X_future.copy() if (X_future is not None and not X_future.empty) else pd.DataFrame(index=range(steps))
+            Xf = _clean_numeric_df(Xf.reindex(columns=list(Xtr.columns), fill_value=np.nan)).fillna(0.0)
+            return _recursive_forecast_tree(model, y_train.values, Xtr, Xf, steps), model
+
+        if model_name == "TFT":
+            if not (HAVE_TFT and cfg["models"].get("TFT", False)):
+                return np.repeat(y_train.iloc[-1], steps), None
+            pars = cfg["tft"] or {}
+            try:
+                m_safe = int(m);  m_safe = m_safe if m_safe > 0 else 1
+            except Exception:
+                m_safe = 1
+            try:
+                steps_safe = int(steps); steps_safe = steps_safe if steps_safe > 0 else 1
+            except Exception:
+                steps_safe = 1
+            in_len = pars.get("input_chunk_length")
+            if not isinstance(in_len, int) or in_len <= 0:
+                in_len = max(2 * m_safe, 24)
+            out_len = pars.get("output_chunk_length")
+            if not isinstance(out_len, int) or out_len <= 0:
+                out_len = max(steps_safe, 1)
+
+            y_vals = pd.to_numeric(y_train.values, errors="coerce")
+            mask   = ~np.isnan(y_vals)
+            if mask.sum() < (in_len + out_len):
+                return np.repeat(y_train.iloc[-1], steps_safe), None
+            series = TimeSeries.from_times_and_values(
+                times=pd.to_datetime(y_train.index)[mask],
+                values=y_vals[mask],
+            )
+            tft_kwargs = dict(
+                input_chunk_length=in_len, output_chunk_length=out_len,
+                hidden_size=pars.get("hidden_size",16), n_epochs=pars.get("n_epochs",50),
+                batch_size=pars.get("batch_size",32), random_state=pars.get("random_state",42),
+            )
+            try:
+                model = TFTModel(add_relative_index=True, **tft_kwargs)
+            except TypeError:
+                model = TFTModel(add_encoders={"relative_index": {"future": True}}, **tft_kwargs)
+            model.fit(series, verbose=False)
+            fc = model.predict(steps_safe).values().ravel()
+            return np.asarray(fc), model
+
+        # default naive
+        return np.repeat(y_train.iloc[-1], steps), None
+
+    # Model selection available
+    model_names = [
+        mname for mname, enabled in cfg["models"].items() if enabled and (
+            (mname in {"Prophet"}   and HAVE_PROPHET) or
+            (mname in {"TBATS"}     and HAVE_TBATS)   or
+            (mname in {"XGBoost"}   and HAVE_XGB)     or
+            (mname in {"LightGBM"}  and HAVE_LGBM)    or
+            (mname in {"TFT"}       and HAVE_TFT)     or
+            (mname not in {"Prophet","TBATS","XGBoost","LightGBM","TFT"})
+        )
+    ]
+    if not model_names:
+        st.warning("No models selected or required libraries are unavailable.")
+        return
+
+    # Rolling CV
+    rows = []
+    for fold in range(folds):
+        train_end = len(y_cv) - (folds - fold)*H - G
+        if train_end < min_train: 
+            continue
+        test_start = train_end + G
+        test_end = min(len(y_cv), test_start + H)
+        y_tr_fold = y_cv.iloc[:train_end]
+        y_te_fold = y_cv.iloc[test_start:test_end]
+        X_tr_fold = X_cv.iloc[:train_end] if not X_cv.empty else pd.DataFrame(index=y_tr_fold.index)
+        X_te_fold = X_cv.iloc[test_start:test_end] if not X_cv.empty else pd.DataFrame(index=y_te_fold.index)
+
+        for model_name in model_names:
+            yhat, _ = _fit_predict(model_name, y_tr_fold,
+                                   X_tr_fold if not X_tr_fold.empty else None,
+                                   steps=len(y_te_fold),
+                                   X_future=X_te_fold if not X_te_fold.empty else None)
+            # inverse transform
+            if transformer[0] == "log1p":
+                yhat_inv = np.expm1(yhat)
+                y_true_inv = y.iloc[test_start:test_end].values
+            elif transformer[0] == "boxcox":
+                lam, shift = transformer[1], transformer[2]
+                if lam == 0: yhat_inv = np.exp(yhat) - shift
+                else:        yhat_inv = np.power(yhat * lam + 1, 1/lam) - shift
+                y_true_inv = y.iloc[test_start:test_end].values
+            else:
+                yhat_inv = yhat; y_true_inv = y.iloc[test_start:test_end].values
+
+            metrics = {
+                "RMSE": rmse(y_true_inv, yhat_inv),
+                "MAE": mae(y_true_inv, yhat_inv),
+                "MASE": mase(y_true_inv, yhat_inv, season=(m if m>1 else 1)),
+                "MAPE": mape(y_true_inv, yhat_inv),
+                "sMAPE": smape(y_true_inv, yhat_inv),
+            }
+            rows.append({"model": model_name, "fold": fold+1, **metrics})
+
+    lb = pd.DataFrame(rows)
+    if lb.empty:
+        st.warning("Cross-validation could not run with the given settings (insufficient data).")
+        return
+
+    agg = lb.groupby("model").mean(numeric_only=True).reset_index()
+    agg = agg.sort_values(primary_metric, ascending=True).reset_index(drop=True)
+    # st.markdown('<div class="block-card"><h4>Leaderboard</h4>', unsafe_allow_html=True)
+    _st_df(agg.assign(folds=int(folds))[["model","folds","MAE","RMSE","MAPE","MASE","sMAPE"]],
+           use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    best_model_name = str(agg.iloc[0]["model"])
+    st.success(f"Best-fit model by **{primary_metric}**: **{best_model_name}**")
+
+    # ========================= Train Best & Forecast =========================
+    st.divider()
+    # st.markdown("## 🧪 Forecast & Diagnostics")
+    st.markdown('<div class="block-card"><h4>🧪 Forecast & Diagnostics</h4>', unsafe_allow_html=True,)
+
+    # Build future index
+    if eff_freq:
+        future_idx = pd.date_range(y_tr.index[-1], periods=cfg["h"]+1, freq=eff_freq, inclusive="right")
+    else:
+        future_idx = pd.date_range(y_tr.index[-1], periods=cfg["h"]+1, freq="W", inclusive="right")
+
+    X_full = _dedupe_index(X, 'last').reindex(y_tr.index) if not X.empty else pd.DataFrame(index=y_tr.index)
+    X_future = pd.DataFrame(index=future_idx)
+    if st.session_state.get("use_calendar_exog", True):
+        idx = future_idx
+        X_future["dow"] = idx.dayofweek
+        X_future["month"] = idx.month
+        X_future["is_month_start"] = idx.is_month_start.astype(int)
+        X_future["is_month_end"] = idx.is_month_end.astype(int)
+        X_future["is_weekend"] = idx.dayofweek.isin([5,6]).astype(int)
+    for c in exog_cols:
+        if c in dfd.columns:
+            last = _safe_align_series_to_index(
+                dfd.set_index(pd.to_datetime(dfd[date_col], errors="coerce"))[c], y_tr.index
+            ).ffill().iloc[-1]
+            X_future[c] = last
+    if not X_full.empty or not X_future.empty:
+        allX = pd.concat([X_full, X_future])
+        for col in list(allX.columns):
+            for L in lag_list:
+                if L == 0: continue
+                allX[f"{col}_lag{L}"] = allX[col].shift(L)
+        if st.session_state.get("scale_exog", True):
+            mu, sd = allX.mean(), allX.std(ddof=0)
+            allX = (allX - mu) / sd
+        X_full = allX.loc[y_tr.index]
+        X_future = allX.loc[future_idx]
+
+    # Fit best
+    yhat_tr, fitted = _fit_predict(best_model_name, y_tr, X_full if not X_full.empty else None,
+                                   steps=len(future_idx),
+                                   X_future=X_future if not X_future.empty else None)
+
+    # inverse transform forecast
+    if transformer[0] == "log1p":
+        y_fc = np.expm1(yhat_tr)
+    elif transformer[0] == "boxcox":
+        lam, shift = transformer[1], transformer[2]
+        y_fc = np.exp(yhat_tr) - shift if lam == 0 else np.power(yhat_tr * lam + 1, 1/lam) - shift
+    else:
+        y_fc = yhat_tr
+
+    # Intervals
+    if HAVE_STATSM and hasattr(fitted, "get_forecast"):
+        try:
+            res_fc = fitted.get_forecast(
+                steps=len(future_idx),
+                exog=(X_future if best_model_name in {"ARIMAX","SARIMAX"} and not X_future.empty else None)
+            )
+            ci = res_fc.conf_int(alpha=0.2)  # 80%
+            lower, upper = ci.iloc[:,0].values, ci.iloc[:,1].values
+        except Exception:
+            s = np.std(y.values[-m:]) if m > 1 else np.std(y.values)
+            lower = y_fc - 1.28*s; upper = y_fc + 1.28*s
+    else:
+        s = np.std(y.values[-m:]) if m > 1 else np.std(y.values)
+        lower = y_fc - 1.28*s; upper = y_fc + 1.28*s
+
+    # Derived frames
+    _fx, _yhat = _align_xy(future_idx, y_fc)
+    _,  _lo = _align_xy(_fx, lower)
+    _,  _hi = _align_xy(_fx, upper)
+    forecast_df = pd.DataFrame({"date": pd.to_datetime(_fx), "yhat": _yhat, "lo80": _lo, "hi80": _hi}).set_index("date")
+
+    # History tables
+    hist_tail = pd.DataFrame({"y": y}).tail(200)
+    hist_stats = pd.DataFrame({
+        "Metric": ["Start", "End", "Observations", "Freq (effective)", "Last value"],
+        "Value": [
+            str(y.index.min()) if len(y) else "—",
+            str(y.index.max()) if len(y) else "—",
+            f"{len(y):,}", eff_freq or "raw",
+            f"{(y.iloc[-1] if len(y) else np.nan):,.4f}",
+        ],
+    })
+
+    # 1) HISTORY (tables + plot)
+    l, r = st.columns([0.48, 0.52], gap="large")
+    with l:
+        st.markdown('<div class="block-card"><h4>Series Overview</h4>', unsafe_allow_html=True)
+        _st_df(hist_tail, use_container_width=True, height=260)
+        st.markdown('<div class="small-note">Showing last 200 observations.</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="block-card"><h4>Series Summary</h4>', unsafe_allow_html=True)
+        _st_df(hist_stats, use_container_width=True, height=190, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with r:
+        st.markdown('<div class="block-card"><h4>History</h4>', unsafe_allow_html=True,)
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(y.index, y.values, linewidth=2.0, marker="o", markersize=3, alpha=0.95)
+        ax.set_title("History")
+        ax.grid(alpha=0.35)
+        fig.tight_layout()
+        # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+        st.pyplot(fig, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 1.1) Data quality & distribution
+    _y_series = pd.Series(y).dropna()
+    n_obs = len(_y_series)
+    idx_num = np.arange(n_obs, dtype=float)
+
+    def _pct_change(series, step):
+        try:
+            return float((series.iloc[-1] / series.iloc[-1-step] - 1) * 100.0) if len(series) > step else np.nan
+        except Exception:
+            return np.nan
+
+    _season_map = {"D":7, "W":52, "MS":12, "M":12, "Q":4}
+    _season_lag = next((v for k, v in _season_map.items() if str(eff_freq).upper().startswith(k)), 1)
+
+    wow = _pct_change(_y_series, 1)
+    mom = _pct_change(_y_series, 4 if _season_lag in (52, 1) else 1)
+    yoy = _pct_change(_y_series, _season_lag) if _season_lag > 1 else np.nan
+
+    try:
+        slope = float(np.cov(idx_num, _y_series.values, ddof=0)[0, 1] / (np.var(idx_num) + 1e-12))
+    except Exception:
+        slope = np.nan
+
+    try:
+        adf_p = float(adfuller(_y_series.dropna(), autolag="AIC")[1]) if HAVE_STATSM else np.nan
+    except Exception:
+        adf_p = np.nan
+
+    _more_stats = pd.DataFrame({
+        "Metric": [
+            "Missing values", "Duplicate index", "Std Dev", "CV (%)",
+            "Trend slope", "Δ last vs prev (%)",
+            "MoM (≈4-step) (%)" if _season_lag in (52,1) else "Δ (1-step) (%)",
+            ("YoY (%)" if _season_lag > 1 else "YoY (%) (n/a)"),
+            "ADF p-value (stationarity)"
+        ],
+        "Value": [
+            int(len(y) - len(_y_series)),
+            int(_y_series.index.duplicated().sum()) if hasattr(_y_series.index, "duplicated") else 0,
+            np.nanstd(_y_series),
+            (np.nanstd(_y_series) / np.nanmean(_y_series) * 100.0) if np.nanmean(_y_series) not in (0, np.nan) else np.nan,
+            slope, wow, mom, yoy, adf_p
+        ]
+    })
+
+    l2, r2 = st.columns([0.48, 0.52], gap="large")
+    with l2:
+        st.markdown('<div class="block-card"><h4>Distribution of values</h4>', unsafe_allow_html=True)
+        _st_df(_more_stats, use_container_width=True, height=260, hide_index=True)
+        st.markdown('<div class="small-note">Slope > 0 ⇒ upward trend. ADF p < 0.05 ⇒ likely stationary.</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with r2:
+        st.markdown('<div class="block-card"><h4>🧪 Forecast & Diagnostics</h4>', unsafe_allow_html=True,)
+        fig, ax = plt.subplots(figsize=(8, 3.8))
+        if n_obs:
+            counts, bins, patches = ax.hist(_y_series.values, bins=max(10, int(np.sqrt(max(n_obs, 1)))), alpha=0.50,
+                                            edgecolor="white", linewidth=0.6)
+            ax.set_title("Distribution of values")
+            ax.grid(alpha=0.35)
+            if len(counts) > 3:
+                c = pd.Series(counts).rolling(3, center=True).mean().values
+                xb = 0.5 * (bins[:-1] + bins[1:])
+                ax.plot(xb, c, linewidth=2.0)
+        fig.tight_layout()
+        # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+        st.pyplot(fig, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 2) Forecast table + plot
+    _forecast_disp = forecast_df.tail(cfg["h"]).copy()
+    l, r = st.columns([0.48, 0.52], gap="large")
+    with l:
+        st.markdown('<div class="block-card"><h4>Forecast Table</h4>', unsafe_allow_html=True)
+        _st_df(_forecast_disp, use_container_width=True, height=300)
+        st.markdown(f'<div class="small-note">Horizon: {cfg["h"]} • Model: <b>{best_model_name}</b></div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with r:
+        st.markdown('<div class="block-card"><h4>Forecast</h4>', unsafe_allow_html=True,)
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(forecast_df.index, forecast_df["yhat"].values, linewidth=2.0, marker="o", markersize=3, alpha=0.95)
+        ax.set_title("Forecast")
+        ax.grid(alpha=0.35)
+        fig.tight_layout()
+        # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+        st.pyplot(fig, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 3) Intervals table + band plot
+    rng = forecast_df[["lo80","hi80"]].tail(cfg["h"]).agg(["min","max"]).T
+    l, r = st.columns([0.48, 0.52], gap="large")
+    with l:
+        st.markdown('<div class="block-card"><h4>Intervals (80%)</h4>', unsafe_allow_html=True)
+        _st_df(forecast_df[["lo80","yhat","hi80"]].tail(cfg["h"]),
+               use_container_width=True, height=300)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('<div class="block-card"><h4>Interval Range (min/max)</h4>', unsafe_allow_html=True)
+        _st_df(rng, use_container_width=True, height=140)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with r:
+        st.markdown('<div class="block-card"><h4>Forecast Interval (approx)</h4>', unsafe_allow_html=True)
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(forecast_df.index, forecast_df["yhat"].values, linewidth=2.0, marker="o", markersize=3, alpha=0.95, label="yhat")
+        ax.fill_between(forecast_df.index, forecast_df["lo80"].values, forecast_df["hi80"].values,
+                        alpha=0.25, label="80% band")
+        ax.legend(loc="upper left", frameon=False)
+        ax.set_title("Forecast Interval (approx)")
+        ax.grid(alpha=0.35)
+        fig.tight_layout()
+        # st.markdown('<div class="Forecast interval (approx)">', unsafe_allow_html=True)
+        st.pyplot(fig, clear_figure=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 4) Residuals & correlations
+    st.divider()
+    # st.markdown("#### Diagnostics")
+    st.markdown('<div class="block-card"><h4>Diagnostics</h4>', unsafe_allow_html=True)
+    if HAVE_STATSM and fitted is not None:
+        try:
+            resid = pd.Series(getattr(fitted, "resid", np.array([])), index=y_tr.index[:len(getattr(fitted, "resid", []))]).dropna()
+        except Exception:
+            resid = pd.Series(dtype=float)
+
+        if not resid.empty:
+            # ACF table + plot
+            l, r = st.columns([0.48, 0.52], gap="large")
+            with l:
+                st.markdown('<div class="block-card"><h4>Autocorrelation (top lags)</h4>', unsafe_allow_html=True)
+                try:
+                    L = min(25, max(2, len(resid)//2))
+                    acf_vals = _acf(resid, nlags=L, fft=True)
+                    acf_df = pd.DataFrame({"lag": list(range(len(acf_vals))), "acf": acf_vals}).head(L+1)
+                    _st_df(acf_df, use_container_width=True, height=260, hide_index=True)
+                except Exception:
+                    st.info("ACF values not available.")
+                st.markdown("</div>", unsafe_allow_html=True)
+            with r:
+                st.markdown('<div class="block-card"><h4>Autocorrelation</h4>', unsafe_allow_html=True)
+                fig, ax = plt.subplots(figsize=(8, 3.2))
+                try:
+                    plot_acf(resid, ax=ax, lags=min(25, len(resid)//2))
+                except Exception:
+                    ax.plot(resid.index, resid.values, lw=1.8)
+                ax.set_title("Autocorrelation")
+                ax.grid(alpha=0.35)
+                fig.tight_layout()
+                # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+                st.pyplot(fig, clear_figure=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # PACF table + plot
+            l, r = st.columns([0.48, 0.52], gap="large")
+            with l:
+                st.markdown('<div class="block-card"><h4>Partial Autocorrelation (top lags)</h4>', unsafe_allow_html=True)
+                try:
+                    L = min(25, max(2, len(resid)//2))
+                    pacf_vals = _pacf(resid, nlags=L, method="ywm")
+                    pacf_df = pd.DataFrame({"lag": list(range(len(pacf_vals))), "pacf": pacf_vals}).head(L+1)
+                    _st_df(pacf_df, use_container_width=True, height=260, hide_index=True)
+                except Exception:
+                    st.info("PACF values not available.")
+                st.markdown("</div>", unsafe_allow_html=True)
+            with r:
+                st.markdown('<div class="block-card"><h4>Partial Autocorrelation</h4>', unsafe_allow_html=True)
+                fig, ax = plt.subplots(figsize=(8, 3.2))
+                try:
+                    plot_pacf(resid, ax=ax, lags=min(25, len(resid)//2), method="ywm")
+                except Exception:
+                    ax.plot(resid.index, resid.values, lw=1.8)
+                ax.set_title("Partial Autocorrelation")
+                ax.grid(alpha=0.35)
+                fig.tight_layout()
+                # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+                st.pyplot(fig, clear_figure=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Residuals summary + plot
+            _res_stats = pd.DataFrame({
+                "Metric": ["Mean", "Std", "Skew", "Kurtosis", "Ljung–Box p-value"],
+                "Value": [
+                    np.nanmean(resid), np.nanstd(resid), pd.Series(resid).skew(), pd.Series(resid).kurt(),
+                    (lambda: float(_ljung(resid, lags=[min(10, max(1, len(resid)//4))], return_df=True)["lb_pvalue"].iloc[0])
+                     if True else np.nan)()
+                ],
+            })
+
+            l, r = st.columns([0.48, 0.52], gap="large")
+            with l:
+                st.markdown('<div class="block-card"><h4>Residuals Summary</h4>', unsafe_allow_html=True)
+                _st_df(_res_stats, use_container_width=True, height=210, hide_index=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            with r:
+                st.markdown('<div class="block-card"><h4>Residuals</h4>', unsafe_allow_html=True)
+                fig, ax = plt.subplots(figsize=(8, 3.2))
+                ax.plot(resid.index, resid.values, linewidth=2.0)
+                ax.set_title(f"Residuals ({best_model_name})")
+                ax.grid(alpha=0.35)
+                fig.tight_layout()
+                # st.markdown('<div class="block-card">', unsafe_allow_html=True)
+                st.pyplot(fig, clear_figure=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info("Residual diagnostics not available for the selected model.")
+    else:
+        st.info("Residual diagnostics not available (statsmodels missing or no fitted model).")
+
+    st.divider()
+    
+    # 1) capture snapshot locally
+    out_dir = kb.flush()  # -> ./KB/{tables,figs,images,html,uploads,text,meta}
+    
+    # 2) read secrets / env
+    az = st.secrets.get("azure", {})
+    account_url       = az.get("account_url")         or os.getenv("AZURE_ACCOUNT_URL")
+    connection_string = az.get("connection_string")   or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    container_sas_url = az.get("container_sas_url")   or os.getenv("AZURE_BLOB_CONTAINER_URL")
+    container         = az.get("container")           or os.getenv("AZURE_BLOB_CONTAINER", "forecast360-kb")
+    prefix            = az.get("prefix", "KB")        # optional virtual folder in the container
+    
+    # 3) upload to Azure Blob
+    try:
+        sync_folder_to_blob(
+            local_folder=out_dir,
+            container=container,
+            prefix=prefix,
+            account_url=account_url,
+            connection_string=connection_string,
+            container_sas_url=container_sas_url,
+            delete_extraneous=False,  # True => strict mirror
+            verbose=False,
+        )
+        st.success(f"✅ Snapshot saved to the **Knowledge Base:** Azure container {container!r} (prefix {prefix!r}).")
+        # Optional: stop capturing further UI
+        # kb.unpatch()
+    except Exception as e:
+        st.error(f"Azure upload failed: {e}")
+    
+    # 4) friendly footer (Sydney local time)
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tz = ZoneInfo("Australia/Sydney")
+    except Exception:
+        from dateutil import tz as _tz  # fallback (pip install tzdata if needed)
+        tz = _tz.gettz("Australia/Sydney")
+    
+    local_time = datetime.now(tz)
+    formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
+    st.info(f"🕒 Local Date & Time: **{formatted_time}**")
+#---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 # --------- ⬇️ ADD THIS EXPORTED WRAPPER (call it from app.py) ---------
 def getting_started_tab():
     """
