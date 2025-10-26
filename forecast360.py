@@ -7,28 +7,34 @@ st.set_page_config(
     page_title="Forecast360",
     page_icon="🧭",
     layout="wide",
-    initial_sidebar_state="expanded"  # JS/CSS will hide it for Home & AI Agent
+    initial_sidebar_state="expanded"  # JS/CSS + flag will still hide it when needed
 )
+
+# Ensure the flag exists (used by GS CTA + JS visibility)
+st.session_state.setdefault("show_sidebar", False)
 
 # --- Imports for the three tabs ---
 from home import page_home
-from gs import render
-from agent import render_agent  # must expose render_agent() in agent.py
+from gs import getting_started_tab        # <-- wrapper that shows CTA first, then sidebar + page
+from agent import render_agent            # remains as-is
 
 # --- Sidebar visibility controller (JS + CSS) ---
-# Shows sidebar ONLY on "Getting Started", hides it on "Home" and "AI Agent".
-components.html(
-    """
-    <script>
-    (function () {
-      const doc = window.parent.document;
+# Shows sidebar ONLY on "Getting Started" AND ONLY after CTA sets show_sidebar=True.
+_show_sidebar_flag = "true" if st.session_state.get("show_sidebar", False) else "false"
 
-      function activeLabel() {
+components.html(
+    f"""
+    <script>
+    (function () {{
+      const doc = window.parent.document;
+      const SHOW_SIDEBAR = {_show_sidebar_flag};  // injected from Python session_state
+
+      function activeLabel() {{
         const btn = doc.querySelector('div[role="tablist"] button[role="tab"][aria-selected="true"]');
         return btn ? btn.textContent.trim() : '';
-      }
+      }}
 
-      function toggleSidebar() {
+      function toggleSidebar() {{
         const label = activeLabel();
         const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
         const chevron = doc.querySelector('[data-testid="collapsedControl"]');
@@ -37,32 +43,35 @@ components.html(
         doc.body.setAttribute('data-tab', label);
 
         if (!sidebar) return;
-        if (label === "Getting Started") {
-          sidebar.style.display = "";
-          if (chevron) chevron.style.display = "";
-        } else {
-          sidebar.style.display = "none";
-          if (chevron) chevron.style.display = "none";
-        }
-      }
+
+        // Only show sidebar if we're on "Getting Started" AND the CTA has been pressed (SHOW_SIDEBAR=true)
+        const shouldShow = (label === "Getting Started") && SHOW_SIDEBAR;
+
+        sidebar.style.display = shouldShow ? "" : "none";
+        if (chevron) chevron.style.display = shouldShow ? "" : "none";
+      }}
 
       // Observe tab selection changes
       const obs = new MutationObserver(toggleSidebar);
-      obs.observe(doc, { subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+      obs.observe(doc, {{ subtree: true, attributes: true, attributeFilter: ["aria-selected"] }});
 
       window.addEventListener("hashchange", toggleSidebar);
       window.addEventListener("load", toggleSidebar);
       toggleSidebar();
-    })();
+    }})();
     </script>
 
     <style>
       /* CSS fallback to guarantee hiding on Home & AI Agent */
       body[data-tab="Home"] section[data-testid="stSidebar"],
-      body[data-tab="AI Agent"] section[data-testid="stSidebar"] { display: none !important; }
+      body[data-tab="AI Agent"] section[data-testid="stSidebar"] {{
+        display: none !important;
+      }}
 
       body[data-tab="Home"] [data-testid="collapsedControl"],
-      body[data-tab="AI Agent"] [data-testid="collapsedControl"] { display: none !important; }
+      body[data-tab="AI Agent"] [data-testid="collapsedControl"] {{
+        display: none !important;
+      }}
     </style>
     """,
     height=0,
@@ -76,7 +85,8 @@ with tab_home:
     page_home()  # Sidebar hidden
 
 with tab_gs:
-    page_getting_started()     # Sidebar visible only here
+    # This wrapper (in gs.py) shows the CTA first; once clicked, it renders sidebar + page.
+    getting_started_tab()
 
 with tab_agent:
-    render_agent()          # Sidebar hidden
+    render_agent()  # Sidebar hidden
