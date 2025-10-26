@@ -2067,7 +2067,8 @@ def render():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+# ------ Sidebar Code -----
+ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
 def render_sidebar():
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
     with st.sidebar:
