@@ -1,5 +1,5 @@
 # Author: Amitesh Jha | iSoft
-# Forecast360 AI Agent — Strict RAG (Weaviate collection only)
+# Forecast360 AI Agent — Strict RAG (Weaviate collection only), concise/specific answers
 # Weaviate v4 client compatible
 
 from __future__ import annotations
@@ -68,33 +68,34 @@ PROMPTS = {
     "system": (
         "I am the Forecast360 AI Agent — a professional decision-intelligence and time-series forecasting assistant "
         "developed by iSoft ANZ Pvt Ltd.\n\n"
-        "Purpose:\n"
         "I answer strictly from the Forecast360 Weaviate knowledge base (documents, captions/alt text, OCR from images, "
         "ASR transcripts from audio/video, slide notes, file names, metadata). I do not use external sources or UI state.\n\n"
         "Retrieval & Matching:\n"
         "- Match by exact keywords and by synonyms, acronyms, abbreviations, plural/singular, and morphological variants.\n"
         "- Map generic terms to Forecast360 vocabulary where possible (e.g., error → RMSE/MAE/MAPE; model → ARIMA/SARIMA/"
         "Prophet/TBATS/XGBoost/LightGBM/TFT; pipeline → ingestion→prep→training→validation→forecast→reporting).\n\n"
-        "Persona & Style:\n"
-        "- I speak as “I/me/my”. I am analytical, precise, supportive, and concise.\n"
-        "- I prefer structured bullets and short paragraphs and never invent facts.\n"
-        "- If information is missing, I respond exactly: “Insufficient Context.”\n"
-        "- I avoid external URLs or speculative content."
+        "Style:\n"
+        "- Speak as “I/me/my”. Be analytical, precise, supportive, and concise.\n"
+        "- Use short bullet points. Never invent facts. If information is missing, respond exactly: “Insufficient Context.”"
     ),
+
+    # Very concise synthesis; include sources list
     "retrieval_template": (
-        "Answer strictly using the Forecast360 Weaviate knowledge base content below.\n\n"
+        "Answer STRICTLY from the Forecast360 knowledge base chunks below.\n\n"
         "User Question:\n{question}\n\n"
-        "Knowledge Base Context (Weaviate — text/captions/OCR/ASR/metadata):\n{kb}\n\n"
-        "Instructions:\n"
-        "- Map question terms to synonyms/acronyms/variants and align to Forecast360 terminology before answering.\n"
-        "- Use only facts supported by the KB context. If insufficient, reply only: “Insufficient Context.”\n"
-        "- Be concise and structured. When naming artifacts (models/metrics/files/pipeline steps), use the exact names from context."
+        "KB Chunks:\n{kb}\n\n"
+        "Write a VERY CONCISE answer in bullet points (max 6 bullets, each ≤20 words). "
+        "Use Forecast360 terms. If the KB is insufficient, reply only: “Insufficient Context.”\n"
+        "End with a line: Sources: <comma-separated short source labels>"
     ),
+
+    # Optimized rewrite for lexical+semantic recall
     "query_rewrite": (
-        "Rewrite the user’s question into a single precise Forecast360/time-series retrieval query optimized for both "
-        "semantic and lexical search. Include the core concept plus common synonyms/abbreviations/acronyms and variants "
-        "in a compact form (use OR or commas). Return only the rewritten query."
+        "Rewrite the user’s question into a single Forecast360/time-series retrieval query optimized for both "
+        "semantic and lexical search. Include core concept plus synonyms/abbreviations/acronyms (use OR or commas). "
+        "Return ONLY the rewritten query."
     ),
+
     "loading": [
         "Analyzing your query and related synonyms…",
         "Searching Forecast360 knowledge across documents, images, and transcripts…",
@@ -201,6 +202,7 @@ def _best_extract_sentences(question: str, texts: List[str], max_pick: int = 6) 
     for s in sents:
         base = sum(s.lower().count(t) for t in q_terms)
         scored.append((base, len(s), s))
+        # Higher score → more term overlap; tie-break shorter sentences for specificity
     scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
     picked = [s for sc, ln, s in scored if sc > 0] or [s for sc, ln, s in scored]
     # clean + dedupe
@@ -208,7 +210,7 @@ def _best_extract_sentences(question: str, texts: List[str], max_pick: int = 6) 
     for s in picked:
         ss = re.sub(r"\s+", " ", s).strip()
         k = ss.lower()
-        if len(ss) >= 24 and k not in seen:
+        if 16 <= len(ss) <= 220 and k not in seen:
             seen.add(k); out.append(ss)
         if len(out) >= max_pick:
             break
@@ -325,7 +327,7 @@ def retrieve(client: Any, class_name: str, query: str, k: int = TOP_K) -> List[D
 
 # ============================ LLM Synthesis & Query Rewrite ============================
 
-def _anthropic_answer(question: str, kb_blocks: List[str]) -> Optional[str]:
+def _anthropic_answer(question: str, kb_blocks: List[str], sources: List[str]) -> Optional[str]:
     """Synthesize an answer strictly from KB blocks. If model absent/unavailable, return None."""
     key = os.getenv("ANTHROPIC_API_KEY") or ANTHROPIC_KEY
     if not key:
@@ -335,17 +337,19 @@ def _anthropic_answer(question: str, kb_blocks: List[str]) -> Optional[str]:
     except Exception:
         return None
 
+    src_line = ", ".join(sorted({s for s in sources if s})) or "KB"
     prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
         question=question,
         kb="\n".join(f"- {c}" for c in kb_blocks)
-    )
+    ) + f"\n\n(Sources to list): {src_line}"
+
     try:
         client = _anthropic.Anthropic(api_key=key)
         msg = client.messages.create(
             model=os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
             system=PROMPTS["system"],
-            max_tokens=500,
-            temperature=0.0,
+            max_tokens=260,       # tighter cap → concise
+            temperature=0.0,      # deterministic, specific
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join([b.text for b in msg.content if getattr(b, "type", "") == "text"]).strip()
@@ -395,19 +399,21 @@ class Forecast360Agent:
         hits = retrieve(self.client, self.class_name, q_precise, TOP_K)
         if not hits:
             return "Insufficient Context."
-        texts = [h["text"] for h in hits]
-        # Pick the most relevant sentences for grounding (keeps synthesis concise)
+
+        # Build concise, specific grounding
+        texts   = [h["text"] for h in hits]
+        sources = [h.get("source", "") for h in hits]
         excerpts = _best_extract_sentences(q_precise, texts, max_pick=6) or texts[:6]
 
-        # 3) LLM Synthesis (strictly grounded to KB only)
-        llm_ans = _anthropic_answer(q_precise, excerpts)
+        # 3) LLM Synthesis (strictly KB only) → very concise answer
+        llm_ans = _anthropic_answer(q_precise, excerpts, sources)
         if llm_ans:
             return llm_ans
 
-        # 4) Fallback extractive summary (still KB-only)
-        parts = ["Here’s what I can confirm from the knowledge base:"]
-        parts += [f"- {ex}" for ex in excerpts]
-        return "\n".join(parts)
+        # 4) Fallback: compact extractive bullets + sources
+        bullets = [f"- {s}" for s in excerpts[:6]]
+        src_line = ", ".join(sorted({s for s in sources if s})) or "KB"
+        return "\n".join(bullets + [f"Sources: {src_line}"])
 
     def respond(self, user_q: str) -> str:
         ql = user_q.strip().lower()
@@ -464,6 +470,8 @@ def _render_agent_core(set_config: bool = False):
           <span class="kb-refresh-btn">""", unsafe_allow_html=True)
 
         if st.button("🔄", key="refresh_kb", help="Refresh KB", use_container_width=False):
+            # Pause GS for this rerun too
+            st.session_state["gs_pause_ticks"] = max(2, int(st.session_state.get("gs_pause_ticks", 0)))
             with st.spinner("Refreshing knowledge base…"):
                 try:
                     stats = sync_from_azure(
@@ -500,11 +508,11 @@ def _render_agent_core(set_config: bool = False):
     agent = Forecast360Agent(st.session_state["f360_client"], COLLECTION_NAME)
 
     # Initial assistant message (only once)
-    if not st.session_state["messages"]:
-        st.session_state["messages"].append({
+    if not st.session_state.get("messages"):
+        st.session_state["messages"] = [{
             "role": "assistant",
             "content": "Hello! I’m your Forecast360 AI Agent. I answer strictly from the Weaviate knowledge base. How can I help?"
-        })
+        }]
 
     # Render chat history
     for m in st.session_state["messages"]:
@@ -512,11 +520,10 @@ def _render_agent_core(set_config: bool = False):
         with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
 
-    # If the parent app wants to queue a question (e.g., from another widget)
+    # If a question was queued by another widget
     if "pending_query" in st.session_state:
+        st.session_state["gs_pause_ticks"] = max(2, int(st.session_state.get("gs_pause_ticks", 0)))
         pq = st.session_state.pop("pending_query")
-        st.session_state["_suspend_gs"] = True  # keep GS tab quiet this run
-
         st.session_state["messages"].append({"role": "user", "content": pq})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(pq)
@@ -527,13 +534,10 @@ def _render_agent_core(set_config: bool = False):
             st.markdown(reply)
         st.session_state["messages"].append({"role": "assistant", "content": reply})
 
-        st.session_state["_suspend_gs"] = False  # clear suspension
-
-    # Chat input — avoid extra reruns; suspend GS during this turn
+    # Chat input — pause GS for the next 2 reruns
     user_q = st.chat_input("Ask me about Forecast360…", key="chat_box")
     if user_q:
-        st.session_state["_suspend_gs"] = True
-
+        st.session_state["gs_pause_ticks"] = 2  # 🚫 Pause GS for this turn
         st.session_state["messages"].append({"role": "user", "content": user_q})
         with st.chat_message("user", avatar=(USER_ICON if os.path.exists(USER_ICON) else "👤")):
             st.markdown(user_q)
@@ -543,8 +547,6 @@ def _render_agent_core(set_config: bool = False):
                 reply = agent.respond(user_q)
             st.markdown(reply)
         st.session_state["messages"].append({"role": "assistant", "content": reply})
-
-        st.session_state["_suspend_gs"] = False  # clear suspension
 
 
 # Public API for embedding inside your tabbed app
