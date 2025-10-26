@@ -104,13 +104,6 @@ def _render_getting_started_cta():
 ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
 
 def sidebar_getting_started():
-    """Sidebar content for Getting Started page (ONLY place with file upload)."""
-
-    # 🚫 Pause GS when the Agent tab fires a chat rerun
-    if int(st.session_state.get("gs_pause_ticks", 0)) > 0:
-        st.session_state["gs_pause_ticks"] = int(st.session_state["gs_pause_ticks"]) - 1
-        st.stop()  # skip the rest of GS sidebar for this rerun
-
     # 🔒 Only show the sidebar after user explicitly starts Getting Started
     if not st.session_state.get("show_sidebar", False):
         return
@@ -795,12 +788,6 @@ def page_getting_started():
       - Residual diagnostics: ACF, PACF, residual stats & plot
     Visuals use a single professional theme for consistency.
     """
-
-    # 🚫 Skip heavy GS rendering during Agent-triggered reruns
-    # Back-compat: honor old boolean flag if it exists
-    if st.session_state.get("_suspend_gs", False):
-        st.stop()
-
     # New guard: a small counter the Agent sets (e.g., 2) to pause GS for N reruns
     if int(st.session_state.get("gs_pause_ticks", 0)) > 0:
         st.session_state["gs_pause_ticks"] = int(st.session_state["gs_pause_ticks"]) - 1
