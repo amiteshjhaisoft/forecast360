@@ -340,8 +340,43 @@ def render_kb_footer():
     st.session_state["_kb_last_sig"] = sig
     st.success(f"Snapshot saved to: {out_dir}")
 
-# ------ Sidebar Code -----
+#------------------------------------------------------------------------------------------------------------------------------------------------
+# --- Render the CTA button ONLY if sidebar not shown yet ---
+if not st.session_state.get("show_sidebar", False):
 
+    # Inject styles once
+    if not st.session_state.get("_home_btn_css"):
+        st.session_state["_home_btn_css"] = True
+        st.markdown("""
+        <style>
+          /* shared center-row so this aligns with copyright block */
+          .hero-center-row{display:flex;justify-content:center;margin:18px 0 6px;}
+
+          /* pretty pill button */
+          .hero-center-row .stButton>button{
+            padding:10px 28px;font-weight:700;font-size:16px;letter-spacing:.2px;border:0;border-radius:999px;color:#fff;
+            background:linear-gradient(135deg,#0b1f3a 0%,#12497b 55%,#2a7cc4 100%);
+            box-shadow:0 10px 22px rgba(18,73,123,.28),0 2px 6px rgba(0,0,0,.06);
+            transition:transform .12s ease, box-shadow .12s ease, filter .12s ease; cursor:pointer;
+          }
+          .hero-center-row .stButton>button:hover{transform:translateY(-1px);box-shadow:0 14px 30px rgba(18,73,123,.32),0 4px 10px rgba(0,0,0,.08);filter:brightness(1.06) saturate(1.05);}
+          .hero-center-row .stButton>button:active{transform:translateY(0);box-shadow:0 8px 18px rgba(18,73,123,.22),0 2px 6px rgba(0,0,0,.06);}
+          .hero-center-row .stButton>button:focus{outline:none;}
+          .hero-center-row .stButton>button:focus-visible{box-shadow:0 0 0 4px rgba(34,197,94,.35),0 10px 22px rgba(18,73,123,.28);}
+        </style>
+        """, unsafe_allow_html=True)
+
+    # Centered exactly in the middle column so it lines up with copyright block
+    btn_l, btn_c, btn_r = st.columns([1, 1, 1])
+    with btn_c:
+        st.markdown('<div class="hero-center-row">', unsafe_allow_html=True)
+        if st.button("Let's Start Time Series Data Forecasting", key="start_btn"):
+            st.session_state["show_sidebar"] = True
+        st.markdown("</div>", unsafe_allow_html=True)
+#-----------------------------------------------------------------------------------------------------------------------------------
+
+
+# ------ Sidebar Code -----
 ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
 
 def render_sidebar() -> None:
