@@ -1,5 +1,4 @@
 # Author: Amitesh Jha | iSOFT
-render():
     # ---- Standard Library
     import os
     import io
@@ -24,9 +23,6 @@ render():
     from kb_capture import KBCapture, kb_set_block
     from kb_sync_azure import sync_folder_to_blob
     
-    # AI Agent
-    from forecast360_chat import run as run_ai_agent
-    
     # Patch once so ALL renders/uploads are captured
     if "kb" not in st.session_state:
         st.session_state.kb = KBCapture(folder_name="KB").patch()  # <- no keep_last
@@ -38,6 +34,62 @@ render():
     import html
     import streamlit as st
     from typing import Any, Callable, Dict, Optional
+# gs.py
+import streamlit as st
+
+def render() -> None:
+    st.title("🚀 Getting Started")
+
+    # GS tab should show the sidebar; keep this flag true here
+    st.session_state.setdefault("show_sidebar", True)
+
+    # --- CTA button (moved from Home to GS main pane) ---
+    if not st.session_state.get("_gs_btn_css"):
+        st.session_state["_gs_btn_css"] = True
+        st.markdown(
+            """
+            <style>
+              /* shared center-row */
+              .hero-center-row{display:flex;justify-content:center;margin:18px 0 6px;}
+
+              /* pretty pill button */
+              .hero-center-row .stButton>button{
+                padding:10px 28px;font-weight:700;font-size:16px;letter-spacing:.2px;border:0;border-radius:999px;color:#fff;
+                background:linear-gradient(135deg,#0b1f3a 0%,#12497b 55%,#2a7cc4 100%);
+                box-shadow:0 10px 22px rgba(18,73,123,.28),0 2px 6px rgba(0,0,0,.06);
+                transition:transform .12s ease, box-shadow .12s ease, filter .12s ease; cursor:pointer;
+              }
+              .hero-center-row .stButton>button:hover{
+                transform:translateY(-1px);
+                box-shadow:0 14px 30px rgba(18,73,123,.32),0 4px 10px rgba(0,0,0,.08);
+                filter:brightness(1.06) saturate(1.05);
+              }
+              .hero-center-row .stButton>button:active{
+                transform:translateY(0);
+                box-shadow:0 8px 18px rgba(18,73,123,.22),0 2px 6px rgba(0,0,0,.06);
+              }
+              .hero-center-row .stButton>button:focus{outline:none;}
+              .hero-center-row .stButton>button:focus-visible{
+                box-shadow:0 0 0 4px rgba(34,197,94,.35),0 10px 22px rgba(18,73,123,.28);
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Center the CTA in the main pane
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        st.markdown('<div class="hero-center-row">', unsafe_allow_html=True)
+        if st.button("Let's Start Time Series Data Forecasting", key="start_btn"):
+            # keep sidebar visible (flag used by your app logic/JS)
+            st.session_state["show_sidebar"] = True
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # (Optional) rest of your Getting Started content below...
+    st.write("Follow these steps to configure and launch your Forecast360 workspace.")
+
     
     # ------------------------------- 1) WIDGET TOOLTIP PATCH ---------------------------------
     
@@ -384,20 +436,6 @@ render():
     
             st.subheader("🚀 Getting Started")
     
-            # # ---- Data Upload -----------------------------------------------------
-            # st.header("📂 Data Upload")
-            # up = st.file_uploader(
-            #     "Upload CSV / Excel / JSON / Parquet / XML",
-            #     type=ACCEPTED_EXTS,
-            #     accept_multiple_files=False,
-            #     key="gs_file",
-            # )
-            # xml_xpath = st.text_input(
-            #     "XML row path (optional XPath)",
-            #     value=st.session_state.get("xml_xpath", ""),
-            #     help="e.g., .//row  or  .//record  or  .//item",
-            #     key="xml_xpath",
-            # )
             # ---- Data Upload -----------------------------------------------------
             st.header("📂 Data Upload")
             up = st.file_uploader(
@@ -2469,10 +2507,7 @@ render():
         st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
 # sidebar_getting_started page_getting_started
-# Public API for embedding inside your tabbed app
 def run() -> None:
-    """Standalone runner for `streamlit run gs.py` (includes page config & sidebar)."""
-    st.set_page_config(page_title="Getting Started", page_icon="🚀", layout="centered")
     render()
 
 # allow “python gs.py”
