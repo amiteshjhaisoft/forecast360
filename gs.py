@@ -2423,13 +2423,12 @@ def render() -> None:
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Public API for embedding inside your tabbed app
-def render_getting_started():
-    render()  # main pane only (parent controls sidebar visibility and calls render_sidebar())
-
-# Standalone runner (useful for `streamlit run gs.py`)
-def run():
+def run() -> None:
+    """Standalone runner for `streamlit run gs.py` (includes page config & sidebar)."""
+    st.set_page_config(page_title="Getting Started", page_icon="🚀", layout="centered")
     render()
     render_sidebar()
+
 
 # allow “python gs.py”
 if __name__ == "__main__":
