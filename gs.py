@@ -347,7 +347,7 @@ def render_kb_footer():
 #---------------------------------------------------------------------------------------------------------
 # ------ Sidebar Code -----
 ACCEPTED_EXTS = ["csv", "xlsx", "xls", "json", "parquet", "xml"]
-def render_sidebar():
+def render_sidebar() -> None:
     """Sidebar content for Getting Started page (ONLY place with file upload)."""
     with st.sidebar:
         # ---- Branding --------------------------------------------------------
@@ -702,9 +702,7 @@ def render_sidebar():
         st.divider()
 
 # ------ Sidebar Code End ----- 
-
-
-def render():
+def render() -> None:
     """
     Full Getting Started page:
       - Summary, Preview, Profile, Boxplot-by-Category, Correlation
@@ -2427,3 +2425,16 @@ def render():
     formatted_time = local_time.strftime("%A, %d %B %Y %I:%M:%S %p %Z")
     st.info(f"🕒 Local Date & Time: **{formatted_time}**")
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Public API for embedding inside your tabbed app
+def render_getting_started():
+    render()  # main pane only (parent controls sidebar visibility and calls render_sidebar())
+
+# Standalone runner (useful for `streamlit run gs.py`)
+def run():
+    st.set_page_config(page_title="Getting Started", page_icon="🚀", layout="centered")
+    render()
+    render_sidebar()
+
+# allow “python gs.py”
+if __name__ == "__main__":
+    run()
