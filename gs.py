@@ -232,7 +232,7 @@ def sidebar_getting_started():
             for c in df.columns:
                 s = df[c]
                 if s.dtype == "object":
-                    parsed = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+                    parsed = pd.to_datetime(s, errors="coerce")
                     if parsed.notna().mean() > 0.8:
                         return c
             return None
@@ -286,7 +286,7 @@ def sidebar_getting_started():
 
         # --- Coerce & clean, track drops ---
         n0 = int(len(_data))
-        _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce", infer_datetime_format=True)
+        _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce")
         bad_date = int(_data[date_col].isna().sum()); _data = _data.dropna(subset=[date_col])
 
         _data[target_col] = pd.to_numeric(_data[target_col], errors="coerce")
@@ -549,7 +549,7 @@ def sidebar_getting_started():
             for c in df.columns:
                 s = df[c]
                 if s.dtype == "object":
-                    parsed = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+                    parsed = pd.to_datetime(s, errors="coerce")
                     if parsed.notna().mean() > 0.8:
                         return c
             return None
@@ -603,7 +603,7 @@ def sidebar_getting_started():
 
         # --- Coerce & clean, track drops ---
         n0 = int(len(_data))
-        _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce", infer_datetime_format=True)
+        _data[date_col] = pd.to_datetime(_data[date_col], errors="coerce")
         bad_date = int(_data[date_col].isna().sum()); _data = _data.dropna(subset=[date_col])
 
         _data[target_col] = pd.to_numeric(_data[target_col], errors="coerce")
